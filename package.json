@@ -1,5 +1,5 @@
 {
-  "name": "sequentialgpu",
+  "name": "@robertmassman/sequentialgpu",
   "version": "0.0.1",
   "description": "A webGPU image processing implementation for rendering filter and their passes in sequence",
   "main": "public/bundle.js",
@@ -24,7 +24,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/robertmassman/sequentialgpu.git"
+    "url": "git+https://github.com/robertmassman/sequentialgpu.git"
   },
   "scripts": {
     "compile": "rollup -c",
@@ -36,5 +36,8 @@
     "@rollup/plugin-node-resolve": "^15.3.0",
     "@rollup/rollup-darwin-arm64": "^4.27.1",
     "rollup": "^4.27.4"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
   }
 }
