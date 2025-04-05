@@ -1,5 +1,3 @@
-import ErrorHandler from './errorHandler.js';
-
 class SettingsValidator {
     static validateSettings(settings) {
         if (!settings.presentationFormat) throw new Error('Presentation format is required.');
@@ -64,7 +62,7 @@ class SettingsValidator {
         ];
 
         if (!validFormats.includes(format)) {
-            ErrorHandler.throwError(
+            throw new Error(
                 'ValidationError',
                 `Invalid texture format '${format}' for texture '${textureKey}'. ` +
                 `Valid formats are: ${validFormats.join(', ')}`

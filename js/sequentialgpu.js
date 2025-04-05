@@ -1,11 +1,14 @@
 
-import { App } from './app.js';
+import { WebGpuRenderer } from './webGpuRenderer.js';
 
 export const SequentialGPU = {
    async createApp(settings) {
-      const app = new App(settings);
-      await app.initialize();
-      return app;
+      const webGpuRenderer = new WebGpuRenderer({
+         ...settings,
+      });
+      await webGpuRenderer.initialize();
+
+      return webGpuRenderer;
    }
 };
 

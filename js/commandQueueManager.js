@@ -1,5 +1,3 @@
-import ErrorHandler from './errorHandler.js';
-
 class CommandQueueManager {
     constructor(device) {
         this.device = device;
@@ -76,23 +74,23 @@ class CommandQueueManager {
     }
 
     async flush() {
-        return ErrorHandler.handleAsyncOperation(
-            async () => {
-                if (!this.isRecording || this.pendingCommands.length === 0) {
-                    return Promise.resolve();
-                }
+        try {
+            if (!this.isRecording || this.pendingCommands.length === 0) {
+                return Promise.resolve();
+            }
 
-                const commandBuffer = this.activeEncoder.finish();
-                this.device.queue.submit([commandBuffer]);
+            const commandBuffer = this.activeEncoder.finish();
+            this.device.queue.submit([commandBuffer]);
 
-                this.pendingCommands = [];
-                this.activeEncoder = null;
-                this.isRecording = false;
+            this.pendingCommands = [];
+            this.activeEncoder = null;
+            this.isRecording = false;
 
-                return this.device.queue.onSubmittedWorkDone();
-            },
-            'Failed to flush command queue'
-        );
+            return this.device.queue.onSubmittedWorkDone();
+        } catch (error) {
+            console.error('Failed to flush command queue', error);
+            throw error;
+        }
     }
 
     dispose() {

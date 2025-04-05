@@ -28,47 +28,6 @@ class VideoProcessor {
     }
 
     // In the VideoProcessor class, modify copyVideoFrameToTexture
-    /*async copyVideoFrameToTexture(video, textureKey, dimensions) {
-        if (!video || !this.canvas || !this.ctx) {
-            console.error('Required resources not available');
-            return;
-        }
-
-        // Clear the canvas first
-        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-
-        return new Promise((resolve) => {
-            const drawFrame = () => {
-                try {
-                    // Update canvas dimensions if needed
-                    if (this.canvas.width !== dimensions.width ||
-                        this.canvas.height !== dimensions.height) {
-                        this.canvas.width = dimensions.width;
-                        this.canvas.height = dimensions.height;
-                    }
-
-                    // Draw the video frame
-                    this.ctx.drawImage(video, 0, 0, dimensions.width, dimensions.height);
-
-                    // Copy to texture
-                    this.app.textureManager.copyImageToTexture(
-                        this.canvas,
-                        textureKey,
-                        dimensions
-                    ).then(resolve);
-                } catch (error) {
-                    console.error('Error in drawFrame:', error);
-                    resolve(); // Resolve anyway to prevent hanging
-                }
-            };
-
-            if ('requestVideoFrameCallback' in video) {
-                video.requestVideoFrameCallback(() => drawFrame());
-            } else {
-                drawFrame(); // Fallback if requestVideoFrameCallback is not available
-            }
-        });
-    }*/
     async copyVideoFrameToTexture(video, textureKey, dimensions) {
         if (!video || !this.canvas || !this.ctx) {
             console.error('Required resources not available');
@@ -148,77 +107,7 @@ class VideoProcessor {
         this.app.renderManager.invalidateFilterChain();
         this.app.renderManager.startRender();
     }
-    // In the VideoProcessor class, modify seekToFrame
-    /*async seekToFrame(frameIndex) {
-        console.log(`Attempting to seek to frame ${frameIndex}`);
-
-        if (!this.videoElement || !this.isVideoReady) {
-            console.warn('Video not ready for seeking');
-            return;
-        }
-
-        // Ensure frameIndex is valid and not 0
-        const safeFrameIndex = Math.max(1, Math.min(frameIndex, this.frameCount - 1));
-        const frameTime = safeFrameIndex * this.frameDuration;
-
-        try {
-            // Set the current time
-            this.videoElement.currentTime = frameTime;
-
-            // Wait for the seek operation to complete
-            await new Promise((resolve, reject) => {
-                const timeout = setTimeout(() => reject(new Error('Seek timeout')), 1000);
-
-                const onSeeked = () => {
-                    clearTimeout(timeout);
-                    this.videoElement.removeEventListener('seeked', onSeeked);
-                    resolve();
-                };
-
-                this.videoElement.addEventListener('seeked', onSeeked);
-            });
-
-            // Wait for a new frame and copy it
-            await new Promise(resolve => {
-                this.videoElement.requestVideoFrameCallback(async () => {
-                    // Clear canvas and draw new frame
-                    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-                    this.ctx.drawImage(this.videoElement, 0, 0);
-
-                    // Copy frame to texture using actual video dimensions
-                    await this.app.textureManager.copyImageToTexture(
-                        this.canvas,
-                        'texture',
-                        {
-                            width: this.canvas.width,
-                            height: this.canvas.height
-                        }
-                    );
-
-                    this.currentFrameIndex = safeFrameIndex;
-
-                    // Force a new render
-                    if (this.app.renderManager) {
-                        this.app.renderManager.invalidateFilterChain();
-                        this.app.renderManager.startRender();
-                    }
-
-                    resolve();
-                });
-            });
-
-            console.log(`Successfully seeked to frame ${safeFrameIndex}`);
-
-        } catch (error) {
-            console.error('Error in seekToFrame:', error);
-            // If seek fails, try next frame
-            if (safeFrameIndex < this.frameCount - 1) {
-                console.log('Attempting recovery by seeking to next frame');
-                await this.seekToFrame(safeFrameIndex + 1);
-            }
-        }
-    }*/
-
+  
     setFrameRange(start, end) {
         let seekFrame = this.startFrame !== start ? this.startFrame : this.endFrame;
         this.startFrame = Math.max(0, Math.min(start, this.frameCount - 1));
@@ -363,70 +252,6 @@ class VideoProcessor {
         });
     }
 
-    /*async startProcessing() {
-        if (!this.isVideoReady || !this.videoElement || this.isProcessingVideo) {
-            console.warn('Video not ready or already processing');
-            return;
-        }
-
-        this.app.updateManager.setAnimating(true);
-        this.isProcessingVideo = true;
-        this.lastDrawTime = performance.now();
-        this.videoElement.pause();
-
-        this.currentFrameIndex = this.startFrame;
-        this.videoElement.currentTime = this.currentFrameIndex * this.frameDuration;
-
-        const processFrame = async (timestamp) => {
-            if (!this.isProcessingVideo) return;
-
-            if (timestamp - this.lastDrawTime >= this.frameInterval) {
-                try {
-                    const nextFrameTime = Math.min(
-                        this.currentFrameIndex * this.frameDuration,
-                        this.videoElement.duration - 0.001
-                    );
-
-                    if (isFinite(nextFrameTime) && nextFrameTime >= 0) {
-                        this.videoElement.currentTime = nextFrameTime;
-
-                        await new Promise(resolve => {
-                            this.videoElement.onseeked = () => {
-                                this.ctx.drawImage(this.videoElement, 0, 0);
-                                resolve();
-                            };
-                        });
-
-                        await this.app.textureManager.copyImageToTexture(
-                            this.canvas,
-                            'texture',
-                            {
-                                width: this.videoElement.videoWidth,
-                                height: this.videoElement.videoHeight
-                            }
-                        );
-
-                        this.currentFrameIndex++;
-                        if (this.currentFrameIndex > this.endFrame) {
-                            this.currentFrameIndex = this.startFrame;
-                        }
-
-                        this.app.renderManager.invalidateFilterChain();
-                        this.app.renderManager.startRender();
-
-                        this.lastDrawTime = timestamp;
-                        this.lastFrameTime = nextFrameTime;
-                    }
-                } catch (error) {
-                    console.error('Error processing frame:', error);
-                }
-            }
-
-            this.frameRequestId = requestAnimationFrame(processFrame);
-        };
-
-        this.frameRequestId = requestAnimationFrame(processFrame);
-    }*/
     async startProcessing() {
         if (!this.isVideoReady || !this.videoElement || this.isProcessingVideo) {
             console.warn('Video not ready or already processing');

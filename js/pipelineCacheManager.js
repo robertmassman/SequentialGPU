@@ -186,27 +186,67 @@ class PipelineCacheManager {
         this.stats.lastUpdate = now;
     }
 
-    async getShaderModule(code) {
+    ////////// NEW
+    /**
+    * Creates a shader module with enhanced error handling
+    * @param {string} code - The shader code
+    * @param {Object} options - Additional options
+    * @param {string} options.label - Label for shader module
+    * @returns {Promise<GPUShaderModule>} The shader module
+    */
+    async getShaderModule(code, options = {}) {
         const shaderKey = this._hashString(code);
+        const { label = 'Unknown Shader' } = options; // Remove fallbackId parameter
 
         if (!this.shaderCache.has(shaderKey)) {
             const startTime = performance.now();
 
-            // Create and validate shader module
-            const module = this.device.createShaderModule({ code });
+            // Create shader module
+            const module = this.device.createShaderModule({
+                code,
+                label: `${label} Shader Module`
+            });
 
             try {
+                // Check for compilation errors
                 const compilationInfo = await module.getCompilationInfo();
-                if (compilationInfo.messages.some(msg => msg.type === 'error')) {
-                    throw new Error(`Shader compilation failed: ${compilationInfo.messages.map(m => m.message).join('\n')}`);
+                const errors = compilationInfo.messages.filter(msg => msg.type === 'error');
+                const warnings = compilationInfo.messages.filter(msg => msg.type === 'warning');
+
+                // Log warnings but continue
+                if (warnings.length > 0) {
+                    console.warn(`Shader warnings in ${label}:`,
+                        warnings.map(w => this._formatShaderMessage(w)).join('\n'));
+                }
+
+                // If we have errors, throw detailed error with specific error type
+                if (errors.length > 0) {
+                    const errorDetails = this._formatShaderErrors(errors, code, label);
+                    console.error(`Shader compilation failed for ${label}:`, errorDetails);
+
+                    // Create a special error type that can be identified
+                    const error = new Error(`Shader compilation failed: ${errorDetails.summary}`);
+                    error.name = 'ShaderCompilationError';
+                    error.details = errorDetails;
+                    throw error;
                 }
             } catch (error) {
-                console.error('Shader compilation error:', error);
-                throw error;
+                if (error.name === 'ShaderCompilationError') {
+                    // This is our formatted error, so just rethrow it
+                    throw error;
+                }
+
+                // For other unexpected errors
+                console.error('Unexpected shader compilation error:', error);
+
+                // Create a generic shader error
+                const genericError = new Error(`Unexpected error compiling shader: ${error.message}`);
+                genericError.name = 'ShaderCompilationError';
+                genericError.originalError = error;
+                throw genericError;
             }
 
             const duration = performance.now() - startTime;
-
             this.shaderCache.set(shaderKey, module);
 
             // Update metrics for shader compilation
@@ -218,17 +258,47 @@ class PipelineCacheManager {
             });
 
             this._maintainCacheSize();
-        } else {
-            // Update metrics for shader cache hit
-            this._updatePerformanceMetrics({
-                operationType: 'shader',
-                operation: 'reuse'
-            });
         }
 
         this.lruList.set(shaderKey, Date.now());
         return this.shaderCache.get(shaderKey);
     }
+
+    /**
+     * Formats shader compilation errors with context
+     * @private
+     */
+    _formatShaderErrors(errors, code, label) {
+        const lines = code.split('\n');
+        const formattedErrors = errors.map(error => this._formatShaderMessage(error, lines));
+
+        return {
+            summary: errors.map(e => e.message).join('\n'),
+            details: formattedErrors,
+            errorCount: errors.length,
+            label
+        };
+    }
+
+    /**
+     * Formats a single shader compilation message with line context
+     * @private
+     */
+    _formatShaderMessage(message, codeLines = []) {
+        const { lineNum, linePos, offset, length, message: msg, type } = message;
+
+        let formattedMsg = `[${type.toUpperCase()}] Line ${lineNum}:${linePos} - ${msg}`;
+
+        // Add code context if we have the code lines
+        if (codeLines.length > 0 && lineNum > 0 && lineNum <= codeLines.length) {
+            const line = codeLines[lineNum - 1];
+            const pointer = ' '.repeat(linePos - 1) + '^'.repeat(Math.max(1, length));
+            formattedMsg += `\n${line}\n${pointer}`;
+        }
+
+        return formattedMsg;
+    }
+    //////////////
 
     getCacheStats() {
         return {

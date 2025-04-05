@@ -186,27 +186,67 @@ class PipelineCacheManager {
         this.stats.lastUpdate = now;
     }
 
-    async getShaderModule(code) {
+    ////////// NEW
+    /**
+    * Creates a shader module with enhanced error handling
+    * @param {string} code - The shader code
+    * @param {Object} options - Additional options
+    * @param {string} options.label - Label for shader module
+    * @returns {Promise<GPUShaderModule>} The shader module
+    */
+    async getShaderModule(code, options = {}) {
         const shaderKey = this._hashString(code);
+        const { label = 'Unknown Shader' } = options; // Remove fallbackId parameter
 
         if (!this.shaderCache.has(shaderKey)) {
             const startTime = performance.now();
 
-            // Create and validate shader module
-            const module = this.device.createShaderModule({ code });
+            // Create shader module
+            const module = this.device.createShaderModule({
+                code,
+                label: `${label} Shader Module`
+            });
 
             try {
+                // Check for compilation errors
                 const compilationInfo = await module.getCompilationInfo();
-                if (compilationInfo.messages.some(msg => msg.type === 'error')) {
-                    throw new Error(`Shader compilation failed: ${compilationInfo.messages.map(m => m.message).join('\n')}`);
+                const errors = compilationInfo.messages.filter(msg => msg.type === 'error');
+                const warnings = compilationInfo.messages.filter(msg => msg.type === 'warning');
+
+                // Log warnings but continue
+                if (warnings.length > 0) {
+                    console.warn(`Shader warnings in ${label}:`,
+                        warnings.map(w => this._formatShaderMessage(w)).join('\n'));
+                }
+
+                // If we have errors, throw detailed error with specific error type
+                if (errors.length > 0) {
+                    const errorDetails = this._formatShaderErrors(errors, code, label);
+                    console.error(`Shader compilation failed for ${label}:`, errorDetails);
+
+                    // Create a special error type that can be identified
+                    const error = new Error(`Shader compilation failed: ${errorDetails.summary}`);
+                    error.name = 'ShaderCompilationError';
+                    error.details = errorDetails;
+                    throw error;
                 }
             } catch (error) {
-                console.error('Shader compilation error:', error);
-                throw error;
+                if (error.name === 'ShaderCompilationError') {
+                    // This is our formatted error, so just rethrow it
+                    throw error;
+                }
+
+                // For other unexpected errors
+                console.error('Unexpected shader compilation error:', error);
+
+                // Create a generic shader error
+                const genericError = new Error(`Unexpected error compiling shader: ${error.message}`);
+                genericError.name = 'ShaderCompilationError';
+                genericError.originalError = error;
+                throw genericError;
             }
 
             const duration = performance.now() - startTime;
-
             this.shaderCache.set(shaderKey, module);
 
             // Update metrics for shader compilation
@@ -218,17 +258,47 @@ class PipelineCacheManager {
             });
 
             this._maintainCacheSize();
-        } else {
-            // Update metrics for shader cache hit
-            this._updatePerformanceMetrics({
-                operationType: 'shader',
-                operation: 'reuse'
-            });
         }
 
         this.lruList.set(shaderKey, Date.now());
         return this.shaderCache.get(shaderKey);
     }
+
+    /**
+     * Formats shader compilation errors with context
+     * @private
+     */
+    _formatShaderErrors(errors, code, label) {
+        const lines = code.split('\n');
+        const formattedErrors = errors.map(error => this._formatShaderMessage(error, lines));
+
+        return {
+            summary: errors.map(e => e.message).join('\n'),
+            details: formattedErrors,
+            errorCount: errors.length,
+            label
+        };
+    }
+
+    /**
+     * Formats a single shader compilation message with line context
+     * @private
+     */
+    _formatShaderMessage(message, codeLines = []) {
+        const { lineNum, linePos, offset, length, message: msg, type } = message;
+
+        let formattedMsg = `[${type.toUpperCase()}] Line ${lineNum}:${linePos} - ${msg}`;
+
+        // Add code context if we have the code lines
+        if (codeLines.length > 0 && lineNum > 0 && lineNum <= codeLines.length) {
+            const line = codeLines[lineNum - 1];
+            const pointer = ' '.repeat(linePos - 1) + '^'.repeat(Math.max(1, length));
+            formattedMsg += `\n${line}\n${pointer}`;
+        }
+
+        return formattedMsg;
+    }
+    //////////////
 
     getCacheStats() {
         return {
@@ -274,113 +344,6 @@ class PipelineCacheManager {
 
 }
 
-class WebGPUError extends Error {
-    constructor(type, message, details = null) {
-        super(message);
-        this.name = 'WebGPUError';
-        this.type = type;
-        this.details = details;
-    }
-}
-
-class ErrorHandler {
-    static throwError(type, message, details = null) {
-        throw new WebGPUError(type, message, details);
-    }
-
-    static validateTexture(key, texture, availableTextures = []) {
-        if (!texture) {
-            this.throwError(
-                'TextureError',
-                `Texture "${key}" not found. Available textures: ${availableTextures.join(', ')}`
-            );
-        }
-    }
-
-    static validateFilter(filterKey, filter, passIndex = null) {
-        if (!filter) {
-            this.throwError(
-                'FilterError',
-                `Filter "${filterKey}" not found`
-            );
-        }
-
-        if (passIndex !== null) {
-            const pass = filter.passes[passIndex];
-            if (!pass) {
-                this.throwError(
-                    'FilterError',
-                    `Pass ${passIndex} not found in filter "${filterKey}"`
-                );
-            }
-        }
-    }
-
-    static validateBindings(filterKey, bindings) {
-        Object.entries(bindings).forEach(([bindingKey, binding]) => {
-            if (!binding.type) {
-                this.throwError(
-                    'BindingError',
-                    `Binding "${bindingKey}" in filter "${filterKey}" missing required type property`
-                );
-            }
-            if (binding.value === undefined) {
-                this.throwError(
-                    'BindingError',
-                    `Binding "${bindingKey}" in filter "${filterKey}" missing required value property`
-                );
-            }
-        });
-    }
-
-    static validateBufferAttachment(filterKey, attachment) {
-        if (attachment) {
-            if (attachment.groupIndex === undefined) {
-                this.throwError(
-                    'BufferError',
-                    `Filter "${filterKey}" buffer attachment missing groupIndex`
-                );
-            }
-
-            if (attachment.bindingIndex !== undefined) {
-                if (attachment.groupIndex === 0 &&
-                    (attachment.bindingIndex === 0 || attachment.bindingIndex === 1)) {
-                    this.throwError(
-                        'BufferError',
-                        `Invalid binding configuration in filter "${filterKey}": group index 0 and binding indices 0 and 1 are reserved`
-                    );
-                }
-            }
-        }
-    }
-
-    static async handleAsyncOperation(operation, errorMessage) {
-        try {
-            return await operation();
-        } catch (error) {
-            this.throwError(
-                'OperationError',
-                errorMessage,
-                error
-            );
-        }
-    }
-
-    static wrapAsync(operation, errorMessage) {
-        return async (...args) => {
-            try {
-                return await operation(...args);
-            } catch (error) {
-                this.throwError(
-                    'OperationError',
-                    errorMessage,
-                    error
-                );
-            }
-        };
-    }
-}
-
 class PipelineManager {
     constructor(app) {
         this.device = app.device;
@@ -392,17 +355,19 @@ class PipelineManager {
     }
 
     async loadShader(url) {
-        return ErrorHandler.handleAsyncOperation(
-            async () => {
-                if (!this.shaderCache.has(url)) {
-                    const response = await fetch(url);
-                    const code = await response.text();
-                    this.shaderCache.set(url, code);
-                }
-                return this.shaderCache.get(url);
-            },
-            `Failed to load shader from ${url}`
-        );
+        try {
+            if (!this.shaderCache.has(url)) {
+                const response = await fetch(url);
+                const code = await response.text();
+                this.shaderCache.set(url, code);
+            }
+            return this.shaderCache.get(url);
+        } catch (error) {
+            console.error(`Failed to load shader from ${url}`);
+            throw error;
+        }
+
+
     }
 
     getCacheStats() {
@@ -518,196 +483,6 @@ class PipelineManager {
         return layout;
     }
 
-    /*createBindGroup(layout, filter, pass, bufferResource) {
-       const entries = [];
-
-       // Add sampler
-       entries.push({
-          binding: 0,
-          resource: this.device.createSampler({
-             magFilter: 'linear',
-             minFilter: 'linear'
-          })
-       });
-
-       // Add texture resources
-       if (pass.inputTexture && Array.isArray(pass.inputTexture)) {
-          pass.inputTexture.forEach((textureName, index) => {
-             const textureView = this.textureManager.getTexture(textureName)?.createView();
-             if (!textureView) {
-                throw new Error(`Texture ${textureName} not found`);
-             }
-             entries.push({
-                binding: index + 1,
-                resource: textureView
-             });
-          });
-       }
-
-       // Add buffer resource if needed
-       if (filter.bufferAttachment?.bindings && bufferResource?.buffer) {
-          entries.push({
-             binding: filter.bufferAttachment.bindingIndex || 3,
-             resource: {
-                buffer: bufferResource.buffer,
-                offset: 0,
-                size: bufferResource.buffer.size
-             }
-          });
-       }
-
-       return this.device.createBindGroup({ layout, entries });
-    }
-    _generateDetailedPipelineKey(config) {
-       const key = JSON.stringify({
-          type: config.type,
-          shader: config.shaderURL,
-          format: config.presentationFormat,
-          samples: config.sampleCount,
-          layout: config.bindGroupLayout
-       });
-       return this.pipelineCacheManager._hashString(key);
-    }
-    async createFilterPipeline(filter) {
-       return ErrorHandler.handleAsyncOperation(
-           async () => {
-
-
-              // Create buffers if needed
-              let bufferResource;
-              if (filter.bufferAttachment?.bindings) {
-                 bufferResource = await this.bufferManager.createFilterBuffers(filter);
-              }
-
-              for (const pass of filter.passes) {
-                 const startTime = performance.now();
-                 // Load and cache shader
-                 const shaderCode = await this.loadShader(pass.shaderURL);
-                 const shaderModule = await this.pipelineCacheManager.getShaderModule(shaderCode);
-
-                 // Create bind group layout
-                 const bindGroupLayout = this.createBindGroupLayout(filter, pass);
-
-                 // Create pipeline layout
-                 const pipelineLayout = this.device.createPipelineLayout({
-                    bindGroupLayouts: [bindGroupLayout]
-                 });
-
-                 // Generate a comprehensive pipeline key
-                 const pipelineKey = this._generateDetailedPipelineKey({
-                    type: filter.type,
-                    shaderURL: pass.shaderURL,
-                    presentationFormat: this.presentationFormat,
-                    sampleCount: filter.type === 'compute' ? 1 : 4,
-                    bindGroupLayout: bindGroupLayout.entries
-                 });
-
-                 // Try to get cached pipeline
-                 let pipeline = this.pipelineCacheManager.pipelineCache.get(pipelineKey);
-                 let actualPipeline;
-
-                 const endTime = performance.now();
-                 if (!pipeline) {
-                    if (filter.type === 'compute') {
-                       const computeDescriptor = {
-                          layout: pipelineLayout,
-                          compute: {
-                             module: shaderModule,
-                             entryPoint: 'main'
-                          }
-                       };
-                       actualPipeline = this.device.createComputePipeline(computeDescriptor);
-                    } else {
-                       const renderDescriptor = {
-                          layout: pipelineLayout,
-                          vertex: {
-                             module: shaderModule,
-                             entryPoint: 'vs',
-                             buffers: [
-                                {
-                                   arrayStride: 8,
-                                   attributes: [{ shaderLocation: 0, format: 'float32x2', offset: 0 }]
-                                },
-                                {
-                                   arrayStride: 8,
-                                   attributes: [{ shaderLocation: 1, format: 'float32x2', offset: 0 }]
-                                }
-                             ]
-                          },
-                          fragment: {
-                             module: shaderModule,
-                             entryPoint: 'fs',
-                             targets: [{ format: this.presentationFormat }]
-                          },
-                          multisample: {
-                             count: 4
-                          }
-                       };
-                       actualPipeline = this.device.createRenderPipeline(renderDescriptor);
-                    }
-
-                    this.pipelineCacheManager.pipelineCache.set(pipelineKey, {
-                       pipeline: actualPipeline,
-                       metadata: {
-                          createdAt: Date.now(),
-                          type: filter.type,
-                          shaderURL: pass.shaderURL,
-                          lastUsed: Date.now()
-                       }
-                    });
-                    this.pipelineCacheManager.stats.pipelinesCreated++;
-                    this.pipelineCacheManager.stats.cacheMisses++;
-                    this.pipelineCacheManager._updatePerformanceMetrics({
-                       operationType: 'pipeline',
-                       operation: 'create',
-                       duration: endTime - startTime
-                    });
-                 }
-                 else {
-                    actualPipeline = pipeline.pipeline;
-                    this.pipelineCacheManager.stats.pipelinesReused++;
-                    this.pipelineCacheManager.stats.cacheHits++;
-                    pipeline.metadata.lastUsed = Date.now();
-                    this.pipelineCacheManager._updatePerformanceMetrics({
-                       operationType: 'pipeline',
-                       operation: 'reuse'
-                    });
-                 }
-
-                 pass.pipeline = actualPipeline;
-
-                 // Wait for GPU operations
-                 await this.device.queue.onSubmittedWorkDone();
-
-                 // Create bind group
-                 pass.bindGroup = [this.createBindGroup(bindGroupLayout, filter, pass, bufferResource)];
-              }
-
-              // Cache maintenance
-              await this._performCacheMaintenance();
-
-              if (this.device.label?.includes('debug')) {
-                 console.log('Cache Stats:', {
-                    pipeline: {
-                       ...this.pipelineCacheManager.stats,
-                       cacheSize: this.pipelineCacheManager.pipelineCache.size
-                    },
-                    layout: {
-                       created: this.pipelineCacheManager.stats.layoutsCreated,
-                       reused: this.pipelineCacheManager.stats.layoutsReused,
-                       cacheSize: this.pipelineCacheManager.layoutCache.size
-                    }
-                 });
-              }
-
-              console.log(this.pipelineCacheManager.stats)
-
-              return bufferResource;
-           },
-           `Failed to create pipeline for filter ${filter.label}`
-       );
-    }*/
-
     ////////////////
     _generateDetailedPipelineKey(config) {
         const keyComponents = {
@@ -766,20 +541,12 @@ class PipelineManager {
             } : undefined
         };
 
-        //console.log(this.pipelineCacheManager.stats)
-
         // Generate a deterministic JSON string
         const sortedKey = JSON.stringify(keyComponents, Object.keys(keyComponents).sort());
         return this.pipelineCacheManager._hashString(sortedKey);
     }
 
     createBindGroup(layout, filter, pass, bufferResource) {
-        /*console.log('Creating bind group:', {
-           filterLabel: filter.label,
-           passLabel: pass.label,
-           hasLayout: !!layout,
-           hasBufferResource: !!bufferResource
-        });*/
 
         if (!layout) {
             throw new Error('No layout provided for bind group creation');
@@ -822,14 +589,12 @@ class PipelineManager {
             });
         }
 
-        //console.log('Bind group entries:', entries);
-
         try {
             const bindGroup = this.device.createBindGroup({
                 layout,
                 entries
             });
-            
+
             if (!bindGroup) {
                 throw new Error('Failed to create bind group');
             }
@@ -842,22 +607,30 @@ class PipelineManager {
     }
 
     async createFilterPipeline(filter) {
-        return ErrorHandler.handleAsyncOperation(
-            async () => {
-                let bufferResource;
-                if (filter.bufferAttachment?.bindings) {
-                    bufferResource = await this.bufferManager.createFilterBuffers(filter);
-                }
+        try {
+            let bufferResource;
+            if (filter.bufferAttachment?.bindings) {
+                bufferResource = await this.bufferManager.createFilterBuffers(filter);
+            }
 
-                for (const pass of filter.passes) {
-                    const startTime = performance.now();
+            let hasValidPasses = false; // Track if any passes are valid
 
-                    // Load and cache shader
+            for (const pass of filter.passes) {
+                const startTime = performance.now();
+
+                try {
+                    // Load and cache shader with enhanced error handling
                     const shaderCode = await this.loadShader(pass.shaderURL);
-                    const shaderModule = await this.pipelineCacheManager.getShaderModule(shaderCode);
+                    const shaderModule = await this.pipelineCacheManager.getShaderModule(
+                        shaderCode,
+                        {
+                            label: `${filter.label}_${pass.label || 'pass'}`
+                        }
+                    );
 
-                    // Create bind group layout
+                    // Create bind group layout and pipeline as before...
                     const bindGroupLayout = this.createBindGroupLayout(filter, pass);
+
 
                     // Create pipeline layout
                     const pipelineLayout = this.device.createPipelineLayout({
@@ -955,14 +728,65 @@ class PipelineManager {
 
                     // Wait for GPU operations
                     await this.device.queue.onSubmittedWorkDone();
+
+                    // Mark this pass as valid
+                    hasValidPasses = true;
+
+                } catch (error) {
+                    // Check if this is a shader compilation error
+                    const isShaderError = error.name === 'ShaderCompilationError';
+
+                    // Log detailed error but don't throw
+                    console.error(`Failed to create pipeline for pass '${pass.label}' in filter '${filter.label}':`,
+                        isShaderError ? 'Shader compilation error' : error);
+
+                    // Mark this pass as inactive so we skip it during rendering
+                    pass.active = false;
+
+                    // Use app.debugLogger if available
+                    if (this.app && this.app.debugLogger) {
+                        this.app.debugLogger.error('PipelineCreation',
+                            `Shader compilation failed for ${filter.label}/${pass.label}, pass will be skipped.`,
+                            error);
+                    }
+
+                    // Continue with other passes instead of failing
+                    continue;
                 }
 
-                await this._performCacheMaintenance();
+            }
 
-                return bufferResource;
-            },
-            `Failed to create pipeline for filter ${filter.label}`
-        );
+            // Only throw an error if all passes failed
+            if (!hasValidPasses && filter.passes.length > 0) {
+                throw new Error(`All passes failed for filter ${filter.label}`);
+            }
+
+            await this._performCacheMaintenance();
+
+            return bufferResource;
+        } catch (error) {
+            console.error(`Failed to create pipeline for filter ${filter.label}`, error);
+            throw error;
+        }
+    }
+
+    /**
+     * Determines appropriate fallback shader type based on filter properties
+     * This method is kept for documentation purposes, but fallbacks are not currently used.
+     * @private
+     */
+    _determineFallbackType(filter, pass) {
+        // Implementation remains for documentation purposes
+        if (filter.type === 'compute') {
+            return 'basic-compute';
+        }
+
+        const filterName = filter.label.toLowerCase();
+        if (filterName.includes('gray') || filterName.includes('luma')) {
+            return 'grayscale';
+        }
+
+        return 'basic-render';
     }
 }
 
@@ -1165,18 +989,19 @@ class BufferManager {
                         binding.type
                     );
                 } else {
-                    ErrorHandler.throwError(
+                    throw new Error(
                         'BufferError',
                         `Binding "${key}" not found in original bindings`
                     );
                 }
             }
         } catch (error) {
-            ErrorHandler.throwError(
+            console.error(
                 'BufferError',
                 'Failed to update buffer data',
                 error
             );
+            throw error;
         }
     }
 }
@@ -1185,6 +1010,17 @@ class SimpleTexturePool {
     constructor(device) {
         this.device = device;
         this.availableTextures = new Map(); // descriptor hash -> texture[]
+        
+        // Add comprehensive memory tracking properties
+        this.totalMemoryUsage = 0;      // Total memory usage in bytes
+        this.activeMemoryUsage = 0;     // Memory used by active textures
+        this.pooledMemoryUsage = 0;     // Memory used by pooled textures
+        this.textureCount = {
+            active: 0,                  // Number of active textures
+            pooled: 0,                  // Number of pooled textures
+            created: 0,                 // Total textures created
+            reused: 0                   // Total textures reused
+        };
     }
 
     /**
@@ -1192,8 +1028,18 @@ class SimpleTexturePool {
      */
     getDescriptorHash(descriptor) {
         const key = `${descriptor.format}_${descriptor.size.width}x${descriptor.size.height}` +
-            `_${descriptor.usage}_${descriptor.sampleCount}`;
+            `_${descriptor.usage}_${descriptor.sampleCount || 1}`;
         return key;
+    }
+
+    /**
+     * Calculate memory usage for a texture based on its descriptor
+     */
+    calculateTextureMemoryUsage(descriptor) {
+        const bytesPerPixel = this.getFormatSize(descriptor.format);
+        const width = descriptor.size.width;
+        const height = descriptor.size.height;
+        return width * height * bytesPerPixel;
     }
 
     /**
@@ -1202,27 +1048,132 @@ class SimpleTexturePool {
     acquire(descriptor) {
         const key = this.getDescriptorHash(descriptor);
         const available = this.availableTextures.get(key) || [];
+        const memoryUsage = this.calculateTextureMemoryUsage(descriptor);
 
         if (available.length > 0) {
-            return available.pop();
+            // Reuse an existing texture from the pool
+            const texture = available.pop();
+            
+            // Update memory tracking
+            this.pooledMemoryUsage -= memoryUsage;
+            this.activeMemoryUsage += memoryUsage;
+            this.textureCount.pooled--;
+            this.textureCount.active++;
+            this.textureCount.reused++;
+            
+            return texture;
         }
 
         // Create new texture if none available
-        return this.device.createTexture(descriptor);
+        const texture = this.device.createTexture(descriptor);
+        
+        // Store descriptor and memory usage on texture for tracking
+        texture.descriptor = {...descriptor}; // Clone to avoid reference issues
+        texture._memoryUsage = memoryUsage;
+        
+        // Update memory tracking
+        this.totalMemoryUsage += memoryUsage;
+        this.activeMemoryUsage += memoryUsage;
+        this.textureCount.active++;
+        this.textureCount.created++;
+        
+        return texture;
     }
 
     /**
      * Return a texture to the pool for reuse
      */
     release(texture) {
-        if (!texture.descriptor) {
+        if (!texture || !texture.descriptor) {
             return;
         }
 
         const key = this.getDescriptorHash(texture.descriptor);
         const available = this.availableTextures.get(key) || [];
+        const memoryUsage = texture._memoryUsage || 0;
+        
+        // Update memory tracking
+        this.activeMemoryUsage -= memoryUsage;
+        this.pooledMemoryUsage += memoryUsage;
+        this.textureCount.active--;
+        this.textureCount.pooled++;
+        
         available.push(texture);
         this.availableTextures.set(key, available);
+    }
+
+    /**
+     * Get bytes per pixel for a format
+     */
+    getFormatSize(format) {
+        switch(format) {
+            case 'r8unorm': 
+            case 'r8snorm': 
+            case 'r8uint':
+            case 'r8sint':
+                return 1;
+            case 'r16uint':
+            case 'r16sint':
+            case 'r16float':
+            case 'rg8unorm':
+            case 'rg8snorm':
+                return 2;
+            case 'r32float':
+            case 'r32uint':
+            case 'r32sint':
+            case 'rg16float':
+            case 'rgba8unorm':
+            case 'rgba8unorm-srgb':
+            case 'rgba8snorm':
+            case 'bgra8unorm':
+            case 'bgra8unorm-srgb':
+                return 4;
+            case 'rg32float':
+            case 'rgba16float':
+                return 8;
+            case 'rgba32float':
+                return 16;
+            default:
+                return 4; // Default to 4 bytes for unknown formats
+        }
+    }
+
+    /**
+     * Get current memory statistics
+     */
+    getMemoryStats() {
+        return {
+            totalBytes: this.totalMemoryUsage,
+            activeBytes: this.activeMemoryUsage,
+            pooledBytes: this.pooledMemoryUsage,
+            megabytes: {
+                total: (this.totalMemoryUsage / (1024 * 1024)).toFixed(2),
+                active: (this.activeMemoryUsage / (1024 * 1024)).toFixed(2),
+                pooled: (this.pooledMemoryUsage / (1024 * 1024)).toFixed(2)
+            },
+            textureCount: {
+                active: this.textureCount.active,
+                pooled: this.textureCount.pooled,
+                total: this.textureCount.active + this.textureCount.pooled,
+                created: this.textureCount.created,
+                reused: this.textureCount.reused,
+                reuseRate: this.textureCount.created > 0 ? 
+                    (this.textureCount.reused / (this.textureCount.created + this.textureCount.reused)).toFixed(2) : "0.00"
+            },
+            formats: this.getFormatDistribution()
+        };
+    }
+    
+    /**
+     * Get distribution of texture formats in the pool
+     */
+    getFormatDistribution() {
+        const formats = {};
+        for (const [key, textures] of this.availableTextures.entries()) {
+            const format = key.split('_')[0];
+            formats[format] = (formats[format] || 0) + textures.length;
+        }
+        return formats;
     }
 
     /**
@@ -1231,12 +1182,17 @@ class SimpleTexturePool {
     destroy() {
         for (const textures of this.availableTextures.values()) {
             for (const texture of textures) {
+                // Update memory tracking before destroying
+                this.totalMemoryUsage -= (texture._memoryUsage || 0);
+                this.pooledMemoryUsage -= (texture._memoryUsage || 0);
                 texture.destroy();
             }
         }
+        
+        // Reset tracking
         this.availableTextures.clear();
+        this.textureCount.pooled = 0;
     }
-
 }
 
 class TextureManager {
@@ -1340,43 +1296,37 @@ class TextureManager {
     }
 
     getTexture(key) {
-        const texture = this.activeTextures.get(key);
-        ErrorHandler.validateTexture(
-            key,
-            texture,
-            Array.from(this.activeTextures.keys())
-        );
-        return texture;
+        try {
+
+            const texture = this.activeTextures.get(key);
+            return texture;
+
+        } catch (error) {
+            console.error(`Error getting texture "${key}" not found. Available textures keys include: ${texture}, ${Array.from(this.activeTextures.keys()).join(', ')}:`, error);
+            throw error;
+        }
     }
 
     async copyImageToTexture(image, textureKey, dimensions) {
-        return ErrorHandler.handleAsyncOperation(
-            async () => {
-                const canvas = document.createElement('canvas');
-                canvas.width = dimensions.width;
-                canvas.height = dimensions.height;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-                const imageBitmap = await createImageBitmap(canvas);
+        try {
+            const canvas = document.createElement('canvas');
+            canvas.width = dimensions.width;
+            canvas.height = dimensions.height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+            const imageBitmap = await createImageBitmap(canvas);
 
-                const texture = this.getTexture(textureKey);
-                this.device.queue.copyExternalImageToTexture(
-                    { source: imageBitmap, flipY: false },
-                    { texture },
-                    dimensions
-                );
-            },
-            `Failed to copy image to texture ${textureKey}`
-        );
+            const texture = this.getTexture(textureKey);
+            this.device.queue.copyExternalImageToTexture(
+                { source: imageBitmap, flipY: false },
+                { texture },
+                dimensions
+            );
+        } catch (error) {
+            console.error(`Failed to copy image to texture ${textureKey}`, error);
+            throw error;
+        }
     }
-
-    // In your TextureManager class
-    /*releaseAllTextures() {
-        // Clear texture cache and release resources
-        this.textureCache = {};
-        this.activeTextures.clear();
-        console.log('All textures released');
-    }*/
 
     async destroyTextures() {
         // Release all active textures back to pool
@@ -1420,47 +1370,6 @@ class VideoProcessor {
     }
 
     // In the VideoProcessor class, modify copyVideoFrameToTexture
-    /*async copyVideoFrameToTexture(video, textureKey, dimensions) {
-        if (!video || !this.canvas || !this.ctx) {
-            console.error('Required resources not available');
-            return;
-        }
-
-        // Clear the canvas first
-        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-
-        return new Promise((resolve) => {
-            const drawFrame = () => {
-                try {
-                    // Update canvas dimensions if needed
-                    if (this.canvas.width !== dimensions.width ||
-                        this.canvas.height !== dimensions.height) {
-                        this.canvas.width = dimensions.width;
-                        this.canvas.height = dimensions.height;
-                    }
-
-                    // Draw the video frame
-                    this.ctx.drawImage(video, 0, 0, dimensions.width, dimensions.height);
-
-                    // Copy to texture
-                    this.app.textureManager.copyImageToTexture(
-                        this.canvas,
-                        textureKey,
-                        dimensions
-                    ).then(resolve);
-                } catch (error) {
-                    console.error('Error in drawFrame:', error);
-                    resolve(); // Resolve anyway to prevent hanging
-                }
-            };
-
-            if ('requestVideoFrameCallback' in video) {
-                video.requestVideoFrameCallback(() => drawFrame());
-            } else {
-                drawFrame(); // Fallback if requestVideoFrameCallback is not available
-            }
-        });
-    }*/
     async copyVideoFrameToTexture(video, textureKey, dimensions) {
         if (!video || !this.canvas || !this.ctx) {
             console.error('Required resources not available');
@@ -1540,77 +1449,7 @@ class VideoProcessor {
         this.app.renderManager.invalidateFilterChain();
         this.app.renderManager.startRender();
     }
-    // In the VideoProcessor class, modify seekToFrame
-    /*async seekToFrame(frameIndex) {
-        console.log(`Attempting to seek to frame ${frameIndex}`);
-
-        if (!this.videoElement || !this.isVideoReady) {
-            console.warn('Video not ready for seeking');
-            return;
-        }
-
-        // Ensure frameIndex is valid and not 0
-        const safeFrameIndex = Math.max(1, Math.min(frameIndex, this.frameCount - 1));
-        const frameTime = safeFrameIndex * this.frameDuration;
-
-        try {
-            // Set the current time
-            this.videoElement.currentTime = frameTime;
-
-            // Wait for the seek operation to complete
-            await new Promise((resolve, reject) => {
-                const timeout = setTimeout(() => reject(new Error('Seek timeout')), 1000);
-
-                const onSeeked = () => {
-                    clearTimeout(timeout);
-                    this.videoElement.removeEventListener('seeked', onSeeked);
-                    resolve();
-                };
-
-                this.videoElement.addEventListener('seeked', onSeeked);
-            });
-
-            // Wait for a new frame and copy it
-            await new Promise(resolve => {
-                this.videoElement.requestVideoFrameCallback(async () => {
-                    // Clear canvas and draw new frame
-                    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-                    this.ctx.drawImage(this.videoElement, 0, 0);
-
-                    // Copy frame to texture using actual video dimensions
-                    await this.app.textureManager.copyImageToTexture(
-                        this.canvas,
-                        'texture',
-                        {
-                            width: this.canvas.width,
-                            height: this.canvas.height
-                        }
-                    );
-
-                    this.currentFrameIndex = safeFrameIndex;
-
-                    // Force a new render
-                    if (this.app.renderManager) {
-                        this.app.renderManager.invalidateFilterChain();
-                        this.app.renderManager.startRender();
-                    }
-
-                    resolve();
-                });
-            });
-
-            console.log(`Successfully seeked to frame ${safeFrameIndex}`);
-
-        } catch (error) {
-            console.error('Error in seekToFrame:', error);
-            // If seek fails, try next frame
-            if (safeFrameIndex < this.frameCount - 1) {
-                console.log('Attempting recovery by seeking to next frame');
-                await this.seekToFrame(safeFrameIndex + 1);
-            }
-        }
-    }*/
-
+  
     setFrameRange(start, end) {
         let seekFrame = this.startFrame !== start ? this.startFrame : this.endFrame;
         this.startFrame = Math.max(0, Math.min(start, this.frameCount - 1));
@@ -1755,70 +1594,6 @@ class VideoProcessor {
         });
     }
 
-    /*async startProcessing() {
-        if (!this.isVideoReady || !this.videoElement || this.isProcessingVideo) {
-            console.warn('Video not ready or already processing');
-            return;
-        }
-
-        this.app.updateManager.setAnimating(true);
-        this.isProcessingVideo = true;
-        this.lastDrawTime = performance.now();
-        this.videoElement.pause();
-
-        this.currentFrameIndex = this.startFrame;
-        this.videoElement.currentTime = this.currentFrameIndex * this.frameDuration;
-
-        const processFrame = async (timestamp) => {
-            if (!this.isProcessingVideo) return;
-
-            if (timestamp - this.lastDrawTime >= this.frameInterval) {
-                try {
-                    const nextFrameTime = Math.min(
-                        this.currentFrameIndex * this.frameDuration,
-                        this.videoElement.duration - 0.001
-                    );
-
-                    if (isFinite(nextFrameTime) && nextFrameTime >= 0) {
-                        this.videoElement.currentTime = nextFrameTime;
-
-                        await new Promise(resolve => {
-                            this.videoElement.onseeked = () => {
-                                this.ctx.drawImage(this.videoElement, 0, 0);
-                                resolve();
-                            };
-                        });
-
-                        await this.app.textureManager.copyImageToTexture(
-                            this.canvas,
-                            'texture',
-                            {
-                                width: this.videoElement.videoWidth,
-                                height: this.videoElement.videoHeight
-                            }
-                        );
-
-                        this.currentFrameIndex++;
-                        if (this.currentFrameIndex > this.endFrame) {
-                            this.currentFrameIndex = this.startFrame;
-                        }
-
-                        this.app.renderManager.invalidateFilterChain();
-                        this.app.renderManager.startRender();
-
-                        this.lastDrawTime = timestamp;
-                        this.lastFrameTime = nextFrameTime;
-                    }
-                } catch (error) {
-                    console.error('Error processing frame:', error);
-                }
-            }
-
-            this.frameRequestId = requestAnimationFrame(processFrame);
-        };
-
-        this.frameRequestId = requestAnimationFrame(processFrame);
-    }*/
     async startProcessing() {
         if (!this.isVideoReady || !this.videoElement || this.isProcessingVideo) {
             console.warn('Video not ready or already processing');
@@ -2038,7 +1813,12 @@ class BindingManager {
                 for (let i = 0; i < pass.inputTexture.length; i++) {
                     const textureName = pass.inputTexture[i];
                     const textureView = this.textureManager.getTexture(textureName)?.createView();
-                    ErrorHandler.validateTexture(textureName, textureView);
+                    if (!textureView) {
+                        this.throwError(
+                            'TextureError',
+                            `Texture "${textureName}" not found. Available textures: ${Array.isArray(pass.inputTexture) ? pass.inputTexture.join(', ') : 'none'}`
+                        );
+                    }
                     entries.push({
                         binding: i + 1,
                         resource: textureView
@@ -2059,11 +1839,12 @@ class BindingManager {
 
             return this.device.createBindGroup({ layout, entries });
         } catch (error) {
-            ErrorHandler.throwError(
+            console.error(
                 'BindGroupError',
                 `Failed to create bind group for filter ${filter.label}`,
                 error
             );
+         throw error;
         }
     }
 
@@ -2110,17 +1891,28 @@ class BindingManager {
 
     async updateFilterInputTexture(filterKey, passIndex, bindingIndex, textureKey, textureIndex, filters) {
         const filter = filters[filterKey];
-        ErrorHandler.validateFilter(filterKey, filter, passIndex);
-
+        
         if (!filter) {
-            console.error(`Filter "${filterKey}" not found`);
-            return;
+            throw new Error(
+                'FilterError',
+                `Filter "${filterKey}" not found`
+            );
         }
 
         const pass = filter.passes[passIndex];
+        
         if (!pass) {
-            console.error(`Pass ${passIndex} not found in filter "${filterKey}"`);
-            return;
+            if (passIndex === null) {
+                throw new Error(
+                    'FilterError',
+                    `passIndex "${passIndex}" not found`
+                );
+            }
+
+            throw new Error(
+                'FilterError',
+                `Pass ${passIndex} not found in filter "${filterKey}"`
+            );
         }
 
         // Update input texture array
@@ -2184,14 +1976,49 @@ class BindingManager {
         }
     }
 
-    // In your BindingManager class
-    /*clearBindingCache() {
-        // Reset binding caches
-        this.bindGroups = {};
-        this.bindGroupLayouts = {};
-        console.log('Binding cache cleared');
-    }*/
-
+    /**
+ * Set up bindings for a specific filter
+ * @param {string} filterKey - The key of the filter
+ * @param {object} filter - The filter object
+ */
+setupFilterBindings(filterKey, filter) {
+    if (!filter || !filter.passes) return;
+    
+    console.log(`Setting up bindings for filter: ${filterKey}`);
+    
+    // Process each pass in the filter
+    for (const pass of filter.passes) {
+      if (!pass.active) continue;
+      
+      // Skip passes that already have bind groups
+      if (pass.bindGroup && pass.bindGroup[0]) continue;
+      
+      console.log(`Creating bind group for pass: ${pass.label}`);
+      
+      // Make sure we have pipeline and entries
+      if (!pass.pipeline) {
+        console.error(`No pipeline available for pass: ${pass.label}`);
+        continue;
+      }
+      
+      if (!pass.bindGroupEntries) {
+        console.warn(`No bind group entries for pass: ${pass.label}, creating empty entries`);
+        pass.bindGroupEntries = [];
+      }
+      
+      // Create bind group from pipeline layout
+      try {
+        pass.bindGroup = [this.app.device.createBindGroup({
+          layout: pass.pipeline.getBindGroupLayout(0),
+          entries: pass.bindGroupEntries
+        })];
+        console.log(`Successfully created bind group for pass: ${pass.label}`);
+      } catch (error) {
+        console.error(`Failed to create bind group for pass: ${pass.label}:`, error);
+      }
+    }
+  }
+  
 }
 
 class UpdateManager {
@@ -2244,7 +2071,6 @@ class UpdateManager {
     async _processUpdate(updateFn) {
         
         if (this.isProcessingUpdates) {
-            console.log('Already processing, queueing update');  // Add this line
             // If already processing, add to queue
             this.pendingUpdates.push(updateFn);
             return;
@@ -2448,23 +2274,23 @@ class CommandQueueManager {
     }
 
     async flush() {
-        return ErrorHandler.handleAsyncOperation(
-            async () => {
-                if (!this.isRecording || this.pendingCommands.length === 0) {
-                    return Promise.resolve();
-                }
+        try {
+            if (!this.isRecording || this.pendingCommands.length === 0) {
+                return Promise.resolve();
+            }
 
-                const commandBuffer = this.activeEncoder.finish();
-                this.device.queue.submit([commandBuffer]);
+            const commandBuffer = this.activeEncoder.finish();
+            this.device.queue.submit([commandBuffer]);
 
-                this.pendingCommands = [];
-                this.activeEncoder = null;
-                this.isRecording = false;
+            this.pendingCommands = [];
+            this.activeEncoder = null;
+            this.isRecording = false;
 
-                return this.device.queue.onSubmittedWorkDone();
-            },
-            'Failed to flush command queue'
-        );
+            return this.device.queue.onSubmittedWorkDone();
+        } catch (error) {
+            console.error('Failed to flush command queue', error);
+            throw error;
+        }
     }
 
     dispose() {
@@ -2538,7 +2364,7 @@ class SettingsValidator {
         ];
 
         if (!validFormats.includes(format)) {
-            ErrorHandler.throwError(
+            throw new Error(
                 'ValidationError',
                 `Invalid texture format '${format}' for texture '${textureKey}'. ` +
                 `Valid formats are: ${validFormats.join(', ')}`
@@ -2755,7 +2581,7 @@ class DebugLogger {
     }
 }
 
-class App {
+class WebGpuRenderer {
    constructor(settings) {
 
       //// ESSENTIAL SETTINGS BELOW ////
@@ -2802,13 +2628,6 @@ class App {
       this.canvas.style.display = 'none';
       this.context = undefined;
 
-      // Add context lost/restored handlers
-      //this.canvas.addEventListener('webglcontextlost', this._handleContextLost.bind(this), false);
-      //this.canvas.addEventListener('webglcontextrestored', this._handleContextRestored.bind(this), false);
-
-      // Add canvas to document if needed
-      //document.body.appendChild(this.canvas);
-
       this.updateManager = new UpdateManager(this);
       this.presentationFormat = settings.presentationFormat || navigator.gpu.getPreferredCanvasFormat(); // Default format
 
@@ -2828,10 +2647,6 @@ class App {
       this.isDisposed = false; // Add disposal flag
       this.debug = settings.debug || false;
 
-
-
-
-
       // Add these to your main app initialization
       window.addEventListener('beforeunload', async (event) => {
          // Ensure cleanup happens before unload
@@ -2846,8 +2661,7 @@ class App {
       // Example debug log
       if (settings.debug) {
          this.debugLogger.log('App', 'Initializing with settings:', settings);
-      }
-      // Modify the monitoring interval
+      }      // Modify the monitoring interval
       if (settings.debug) {
          this.monitoringInterval = setInterval(() => {
             this.debugLogger.log('Performance', 'Current Stats', {
@@ -2855,25 +2669,8 @@ class App {
                commandQueue: this.commandQueue?.stats
             });
          }, 10000);
-      }
+      }      
    }
-
-
-   async recoverRenderContext() {
-      console.log('Attempting to recover render context');
-      try {
-         await this.dispose();
-         await this.setupDevice();
-         await this.createResources(this.imageArray[this.imageIndex].type === 'Video');
-
-         if (this.renderManager) {
-            this.renderManager.startRender();
-         }
-      } catch (error) {
-         console.error('Failed to recover render context:', error);
-      }
-   }
-
 
    async _cleanup() {
       try {
@@ -3044,8 +2841,7 @@ class App {
    }
 
    async loadImageSource(blob) {
-      return ErrorHandler.handleAsyncOperation(
-         async () => {
+      try {
             let imageURL = blob;
 
             // Create image and load it
@@ -3059,7 +2855,6 @@ class App {
                   // And only if we created a new blob URL (not for string paths)
                   if (imageURL !== blob && (blob instanceof Blob ||
                      (typeof blob === 'object'))) {
-                     console.log("******  !!!!  REVOKE URL  !!!!  ******");
                      URL.revokeObjectURL(imageURL);
                   }
 
@@ -3069,9 +2864,10 @@ class App {
                img.onerror = (error) => reject(error);
                img.src = imageURL;
             });
-         },
-         `Failed to load image URL ${blob}`
-      );
+         } catch (error) {
+            console.error(`Failed to load image URL ${blob}`, error);
+            throw error;
+         }
    }
 
 
@@ -3086,19 +2882,16 @@ class App {
     * Resize with proper resource cleanup
     */
    async resize(width, height, resetSize = false) {
-      return ErrorHandler.handleAsyncOperation(
-         async () => {
-            console.log('Starting resize operation');
-            console.log(`Width: ${width}, Height: ${height}, ResetSize: ${resetSize}`);
+      try {
+
+            //console.log('Resizing application from:', this.canvas.width, this.canvas.height, 'to:', width, height, resetSize);
 
             // Wait for GPU to complete pending work
             await this.waitForGPU();
-            console.log('GPU work completed');
 
             // Check if video processor exists and if current file is video
-            let type = this.imageArray[this.imageIndex].type;
-            let isVideo = type === 'Video';
-            console.log("IS VIDEO", isVideo);
+            //let type = this.imageArray[this.imageIndex].type;
+            let isVideo = this.imageArray[this.imageIndex].type === 'Video';
 
             // Get current dimensions based on source type
             const currentWidth = isVideo ? this.videoProcessor.videoElement.videoWidth : this.image.width;
@@ -3112,7 +2905,6 @@ class App {
                let heightRatio = height / currentHeight;
                this.ratio = Math.min(widthRatio, heightRatio);
             }
-            console.log(`Ratio set to: ${this.ratio}`);
 
             // Store cache state before resizing
             if (this.pipelineManager) {
@@ -3123,11 +2915,9 @@ class App {
                for (const key of activeTextureKeys) {
                   this.textureManager.releaseTexture(key);
                }
-               console.log('Active textures released');
 
                // Recreate resources
                await this.createResources(isVideo);
-               console.log('Resources recreated');
 
                // Restore compatible cached items with new dimensions
                await this.pipelineManager.pipelineCacheManager.restoreCacheState(
@@ -3137,82 +2927,21 @@ class App {
                      height: this.canvas.height
                   }
                );
-               console.log('Cache state restored');
             }
             else {
                // If no pipeline manager exists, just create resources
                await this.createResources(isVideo);
             }
 
+            //console.log('Resized canvas to:', this.canvas.width, this.canvas.height, resetSize);
+
             return true;
-         },
-         'Failed to resize application'
-      );
+         } catch (error) {
+            console.error('Failed to resize application:', error);
+            throw error;
+         }
+         
    }
-
-   //// DO NOT DELETE SCALE FUNCTION ////
-   /*async scale(ratio) {
-      try {
-         // Destroy existing textures
-
-         await this.textureManager.destroyTextures();
-
-         this.ratio = ratio;
-
-
-         console.log(this.imageArray[this.imageIndex])
-         let type = this.imageArray[this.imageIndex].type;
-         let isVideo = type === 'Video';
-         // Recreate resources
-         await this.createResources(isVideo);
-         return true;
-      } catch (error) {
-         console.error('Error resizing textures', error);
-      }
-   }*/
-   /*async scale(ratio) {
-      try {
-         // Wait for any pending GPU operations
-         await this.waitForGPU();
-
-         // Store the new ratio
-         this.ratio = ratio;
-
-         // Calculate new dimensions
-         const newWidth = Math.floor(this.image.width * ratio);
-         const newHeight = Math.floor(this.image.height * ratio);
-
-         // Update canvas dimensions
-         this.canvas.width = newWidth;
-         this.canvas.height = newHeight;
-
-         // Reconfigure the context with new dimensions
-         this.context.configure({
-            device: this.device,
-            format: this.presentationFormat,
-            alphaMode: 'premultiplied',
-            size: {
-               width: newWidth,
-               height: newHeight
-            },
-         });
-
-         // Release existing textures
-         await this.textureManager.destroyTextures();
-
-         // Get file type to check if it's a video
-         let type = this.imageArray[this.imageIndex].type;
-         let isVideo = type === 'Video';
-
-         // Recreate resources with new dimensions
-         await this.createResources(isVideo);
-
-         return true;
-      } catch (error) {
-         console.error('Error scaling textures:', error);
-         throw error;
-      }
-   }*/
 
    async clearBuffer(buffer) {
       // Create a temporary buffer to clear the buffer
@@ -3648,8 +3377,6 @@ class App {
     */
    async setupDevice() {
       try {
-         //this.adapter = await navigator.gpu.requestAdapter();
-         //this.device = await this.adapter.requestDevice();
 
          // Request adapter with more robust features
          this.adapter = await navigator.gpu.requestAdapter({
@@ -3691,6 +3418,9 @@ class App {
          this.textureManager = new TextureManager(this);
 
          this.bindingManager = new BindingManager(this);
+
+        
+
       }
       catch (error) {
          console.error(`Failed to setup device: ${error}`);
@@ -3700,219 +3430,6 @@ class App {
    /**
     * Create resources with proper tracking
     */
-   /*async createResources(isVideo = false) {
-
-      console.log(this.imageArray);
-      if(this.imageArray.length === 0){
-         return;
-      }
-      let type = this.imageArray[this.imageIndex].type;
-      console.log(type);
-
-      isVideo = type === 'Video';
-
-
-      let width = isVideo ? this.videoProcessor.videoElement.videoWidth : this.image.width;
-      let height = isVideo ? this.videoProcessor.videoElement.videoHeight : this.image.height;
-
-      let ratio = this.ratio || 1.0;
-      this.canvas.width = width * ratio;
-      this.canvas.height = height * ratio;
-
-
-      try {
-         this.context = this.canvas.getContext('webgpu', { alpha: true });
-      } catch (error) {
-         console.error('Error initializing WebGPU context:', error);
-         throw error;
-      }
-
-      if (!this.device) {
-         await this.setupDevice();
-      }
-
-      try {
-         this.context.configure({
-            device: this.device,
-            format: this.presentationFormat,
-            alphaMode: 'premultiplied',
-            size: {
-               width: this.canvas.width,
-               height: this.canvas.height
-            },
-         });
-
-         // Create textures and track them
-         await this.textureManager.createTextures({
-            textures: this.textures,
-            canvas: {
-               width: this.canvas.width,
-               height: this.canvas.height
-            }
-         });
-
-         console.log(isVideo);
-         // Copy initial frame/image
-         if (isVideo) {
-            await this.textureManager.copyVideoFrameToTexture(
-                this.videoProcessor.videoElement,
-                'texture',
-                {
-                   width: width,
-                   height: height
-                }
-            );
-         } else {
-            await this.textureManager.copyImageToTexture(
-                this.image,
-                'texture',
-                {
-                   width: width,
-                   height: height
-                }
-            );
-         }
-
-         // Create buffers
-         await this.createPositionBuffer();
-         await this.createTexCordBuffer();
-
-         // Initialize managers if needed
-         if (!this.bufferManager) {
-            this.bufferManager = new BufferManager(this.device);
-         }
-         if (!this.pipelineManager) {
-            this.pipelineManager = new PipelineManager(this);
-         }
-         if(!this.commandQueue){
-            this.commandQueue = new CommandQueueManager(this.device);
-         }
-
-         // Create pipelines for all filters
-         for (const [filterName, filter] of Object.entries(this.filters)) {
-            filter.resources = await this.pipelineManager.createFilterPipeline(filter);
-         }
-         // Add debug logging after pipelines are created
-         if (this.debug) {
-            const cacheStats = this.pipelineManager.pipelineCacheManager.getCachePerformance();
-            console.log('Pipeline Cache Performance:', cacheStats);
-         }
-
-      } catch (error) {
-         console.error('Error creating resources:', error);
-         throw error;
-      }
-   }*/
-   /*async createResources(isVideo = false) {
-      if (this.imageArray.length === 0) {
-         return;
-      }
-
-      let type = this.imageArray[this.imageIndex].type;
-      isVideo = type === 'Video';
-
-      // Get original dimensions
-      let originalWidth = isVideo ? this.videoProcessor.videoElement.videoWidth : this.image.width;
-      let originalHeight = isVideo ? this.videoProcessor.videoElement.videoHeight : this.image.height;
-
-
-      // Calculate scaled dimensions
-      //let ratio = this.ratio || 1.0;
-      let ratio = 0.416 || 1.0;
-      let scaledWidth = Math.floor(originalWidth * ratio);
-      let scaledHeight = Math.floor(originalHeight * ratio);
-
-      console.log(originalWidth, originalHeight, scaledWidth, scaledHeight);
-      // Set canvas dimensions to scaled size
-      this.canvas.width = scaledWidth;
-      this.canvas.height = scaledHeight;
-
-      try {
-         this.context = this.canvas.getContext('webgpu', { alpha: true });
-      } catch (error) {
-         console.error('Error initializing WebGPU context:', error);
-         throw error;
-      }
-
-      if (!this.device) {
-         await this.setupDevice();
-      }
-
-      try {
-         // Configure context with scaled dimensions
-         this.context.configure({
-            device: this.device,
-            format: this.presentationFormat,
-            alphaMode: 'premultiplied',
-            size: {
-               width: scaledWidth,
-               height: scaledHeight
-            },
-         });
-
-         // Create textures with scaled dimensions
-         await this.textureManager.createTextures({
-            textures: this.textures,
-            canvas: {
-               width: scaledWidth,
-               height: scaledHeight
-            }
-         });
-
-         console.log(`GOT FILTERS`);
-         // Copy initial frame/image using scaled dimensions
-         if (isVideo) {
-            await this.textureManager.copyVideoFrameToTexture(
-                this.videoProcessor.videoElement,
-                'texture',
-                {
-                   width: scaledWidth,
-                   height: scaledHeight
-                }
-            );
-         }
-         else {
-            await this.textureManager.copyImageToTexture(
-                this.image,
-                'texture',
-                {
-                   width: scaledWidth,
-                   height: scaledHeight
-                }
-            );
-         }
-         // In the createResources method, replace the video handling section with this:
-
-
-         // Create buffers and initialize managers
-         await this.createPositionBuffer();
-         await this.createTexCordBuffer();
-
-         if (!this.bufferManager) {
-            this.bufferManager = new BufferManager(this.device);
-         }
-         if (!this.pipelineManager) {
-            this.pipelineManager = new PipelineManager(this);
-         }
-         if (!this.commandQueue) {
-            this.commandQueue = new CommandQueueManager(this.device);
-         }
-
-         // Create pipelines for all filters
-         for (const [, filter] of Object.entries(this.filters)) {
-            filter.resources = await this.pipelineManager.createFilterPipeline(filter);
-         }
-
-         if (this.debug) {
-            const cacheStats = this.pipelineManager.pipelineCacheManager.getCachePerformance();
-            console.log('Pipeline Cache Performance:', cacheStats);
-         }
-
-      } catch (error) {
-         console.error('Error creating resources:', error);
-         throw error;
-      }
-   }*/
    async createResources(isVideo = false) {
       if (this.imageArray.length === 0) {
          return;
@@ -3934,8 +3451,6 @@ class App {
       // Set canvas dimensions to scaled size
       this.canvas.width = scaledWidth;
       this.canvas.height = scaledHeight;
-
-      console.log('CANVAS CREATION SIZE', this.canvas.width, this.canvas.height);
 
       try {
          this.context = this.canvas.getContext('webgpu', { alpha: true });
@@ -3975,6 +3490,8 @@ class App {
          tempCanvas.height = scaledHeight;
          const tempCtx = tempCanvas.getContext('2d');
          tempCtx.imageSmoothingQuality = 'high';
+
+         //console.log('this image:', this.image);
 
          // Copy and scale initial frame/image
          if (isVideo) {
@@ -4038,6 +3555,64 @@ class App {
       }
    }
 
+   /**
+ * Reports a shader compilation error to the user
+ * @param {Object} errorDetails - The error details object
+ */
+   reportShaderError(errorDetails) {
+      if (!this.debug) return;
+
+      const { label, summary, details, errorCount } = errorDetails;
+
+      // Log to console
+      console.error(`Shader Compilation Error (${label})`, {
+         summary,
+         details,
+         errorCount
+      });
+
+      // Create or update error overlay for immediate user feedback
+      let errorOverlay = document.getElementById('sequentialgpu-error-overlay');
+      if (!errorOverlay) {
+         errorOverlay = document.createElement('div');
+         errorOverlay.id = 'sequentialgpu-error-overlay';
+         errorOverlay.style.cssText = `
+           position: fixed;
+           bottom: 0;
+           left: 0;
+           right: 0;
+           background: rgba(200, 0, 0, 0.85);
+           color: white;
+           padding: 10px;
+           font-family: monospace;
+           max-height: 30vh;
+           overflow: auto;
+           z-index: 10000;
+           white-space: pre-wrap;
+           border-top: 2px solid #ff0000;
+       `;
+         document.body.appendChild(errorOverlay);
+      }
+
+      // Update content
+      errorOverlay.innerHTML = `
+       <h3>Shader Error: ${label}</h3>
+       <div>${details.map(d => `<div>${d}</div>`).join('')}</div>
+       <button style="margin-top: 10px; padding: 5px 10px; background: #333; border: none; color: white; cursor: pointer;">
+           Dismiss
+       </button>
+   `;
+
+      // Add dismiss button handler
+      errorOverlay.querySelector('button').onclick = () => {
+         errorOverlay.style.display = 'none';
+      };
+
+      // Auto-hide after 15 seconds
+      setTimeout(() => {
+         if (errorOverlay) errorOverlay.style.display = 'none';
+      }, 15000);
+   }
 
    /**
     * Initialize the program
@@ -4048,9 +3623,6 @@ class App {
 
          // Validate settings before proceeding with initialization
          SettingsValidator.validateSettings(this);
-         console.log(this);
-         console.log("IMAGE INDEX ", this.imageIndex);
-         console.log(this.imageArray);
 
          try {
             if (this.imageArray.length > 0) {
@@ -4085,9 +3657,12 @@ class App {
 
 const SequentialGPU = {
    async createApp(settings) {
-      const app = new App(settings);
-      await app.initialize();
-      return app;
+      const webGpuRenderer = new WebGpuRenderer({
+         ...settings,
+      });
+      await webGpuRenderer.initialize();
+
+      return webGpuRenderer;
    }
 };
 

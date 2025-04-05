@@ -1,5 +1,3 @@
-import ErrorHandler from './errorHandler.js';
-
 class BufferManager {
     constructor(device) {
         this.device = device;
@@ -199,18 +197,19 @@ class BufferManager {
                         binding.type
                     );
                 } else {
-                    ErrorHandler.throwError(
+                    throw new Error(
                         'BufferError',
                         `Binding "${key}" not found in original bindings`
                     );
                 }
             }
         } catch (error) {
-            ErrorHandler.throwError(
+            console.error(
                 'BufferError',
                 'Failed to update buffer data',
                 error
             );
+            throw error;
         }
     }
 }

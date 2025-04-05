@@ -1,5 +1,3 @@
-import ErrorHandler from './errorHandler.js';
-
 class BindingManager {
     constructor(app) {
         this.device = app.device;
@@ -109,7 +107,12 @@ class BindingManager {
                 for (let i = 0; i < pass.inputTexture.length; i++) {
                     const textureName = pass.inputTexture[i];
                     const textureView = this.textureManager.getTexture(textureName)?.createView();
-                    ErrorHandler.validateTexture(textureName, textureView);
+                    if (!textureView) {
+                        this.throwError(
+                            'TextureError',
+                            `Texture "${textureName}" not found. Available textures: ${Array.isArray(pass.inputTexture) ? pass.inputTexture.join(', ') : 'none'}`
+                        );
+                    }
                     entries.push({
                         binding: i + 1,
                         resource: textureView
@@ -130,11 +133,12 @@ class BindingManager {
 
             return this.device.createBindGroup({ layout, entries });
         } catch (error) {
-            ErrorHandler.throwError(
+            console.error(
                 'BindGroupError',
                 `Failed to create bind group for filter ${filter.label}`,
                 error
             );
+         throw error;
         }
     }
 
@@ -181,17 +185,28 @@ class BindingManager {
 
     async updateFilterInputTexture(filterKey, passIndex, bindingIndex, textureKey, textureIndex, filters) {
         const filter = filters[filterKey];
-        ErrorHandler.validateFilter(filterKey, filter, passIndex);
-
+        
         if (!filter) {
-            console.error(`Filter "${filterKey}" not found`);
-            return;
+            throw new Error(
+                'FilterError',
+                `Filter "${filterKey}" not found`
+            );
         }
 
         const pass = filter.passes[passIndex];
+        
         if (!pass) {
-            console.error(`Pass ${passIndex} not found in filter "${filterKey}"`);
-            return;
+            if (passIndex === null) {
+                throw new Error(
+                    'FilterError',
+                    `passIndex "${passIndex}" not found`
+                );
+            }
+
+            throw new Error(
+                'FilterError',
+                `Pass ${passIndex} not found in filter "${filterKey}"`
+            );
         }
 
         // Update input texture array
@@ -255,14 +270,49 @@ class BindingManager {
         }
     }
 
-    // In your BindingManager class
-    /*clearBindingCache() {
-        // Reset binding caches
-        this.bindGroups = {};
-        this.bindGroupLayouts = {};
-        console.log('Binding cache cleared');
-    }*/
-
+    /**
+ * Set up bindings for a specific filter
+ * @param {string} filterKey - The key of the filter
+ * @param {object} filter - The filter object
+ */
+setupFilterBindings(filterKey, filter) {
+    if (!filter || !filter.passes) return;
+    
+    console.log(`Setting up bindings for filter: ${filterKey}`);
+    
+    // Process each pass in the filter
+    for (const pass of filter.passes) {
+      if (!pass.active) continue;
+      
+      // Skip passes that already have bind groups
+      if (pass.bindGroup && pass.bindGroup[0]) continue;
+      
+      console.log(`Creating bind group for pass: ${pass.label}`);
+      
+      // Make sure we have pipeline and entries
+      if (!pass.pipeline) {
+        console.error(`No pipeline available for pass: ${pass.label}`);
+        continue;
+      }
+      
+      if (!pass.bindGroupEntries) {
+        console.warn(`No bind group entries for pass: ${pass.label}, creating empty entries`);
+        pass.bindGroupEntries = [];
+      }
+      
+      // Create bind group from pipeline layout
+      try {
+        pass.bindGroup = [this.app.device.createBindGroup({
+          layout: pass.pipeline.getBindGroupLayout(0),
+          entries: pass.bindGroupEntries
+        })];
+        console.log(`Successfully created bind group for pass: ${pass.label}`);
+      } catch (error) {
+        console.error(`Failed to create bind group for pass: ${pass.label}:`, error);
+      }
+    }
+  }
+  
 }
 
 export default BindingManager;

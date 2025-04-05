@@ -48,7 +48,6 @@ class UpdateManager {
     async _processUpdate(updateFn) {
         
         if (this.isProcessingUpdates) {
-            console.log('Already processing, queueing update');  // Add this line
             // If already processing, add to queue
             this.pendingUpdates.push(updateFn);
             return;

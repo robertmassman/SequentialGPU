@@ -1,5 +1,4 @@
 import PipelineCacheManager from "./pipelineCacheManager.js";
-import ErrorHandler from './errorHandler.js';
 
 class PipelineManager {
     constructor(app) {
@@ -12,17 +11,19 @@ class PipelineManager {
     }
 
     async loadShader(url) {
-        return ErrorHandler.handleAsyncOperation(
-            async () => {
-                if (!this.shaderCache.has(url)) {
-                    const response = await fetch(url);
-                    const code = await response.text();
-                    this.shaderCache.set(url, code);
-                }
-                return this.shaderCache.get(url);
-            },
-            `Failed to load shader from ${url}`
-        );
+        try {
+            if (!this.shaderCache.has(url)) {
+                const response = await fetch(url);
+                const code = await response.text();
+                this.shaderCache.set(url, code);
+            }
+            return this.shaderCache.get(url);
+        } catch (error) {
+            console.error(`Failed to load shader from ${url}`);
+            throw error;
+        }
+
+
     }
 
     getCacheStats() {
@@ -138,196 +139,6 @@ class PipelineManager {
         return layout;
     }
 
-    /*createBindGroup(layout, filter, pass, bufferResource) {
-       const entries = [];
-
-       // Add sampler
-       entries.push({
-          binding: 0,
-          resource: this.device.createSampler({
-             magFilter: 'linear',
-             minFilter: 'linear'
-          })
-       });
-
-       // Add texture resources
-       if (pass.inputTexture && Array.isArray(pass.inputTexture)) {
-          pass.inputTexture.forEach((textureName, index) => {
-             const textureView = this.textureManager.getTexture(textureName)?.createView();
-             if (!textureView) {
-                throw new Error(`Texture ${textureName} not found`);
-             }
-             entries.push({
-                binding: index + 1,
-                resource: textureView
-             });
-          });
-       }
-
-       // Add buffer resource if needed
-       if (filter.bufferAttachment?.bindings && bufferResource?.buffer) {
-          entries.push({
-             binding: filter.bufferAttachment.bindingIndex || 3,
-             resource: {
-                buffer: bufferResource.buffer,
-                offset: 0,
-                size: bufferResource.buffer.size
-             }
-          });
-       }
-
-       return this.device.createBindGroup({ layout, entries });
-    }
-    _generateDetailedPipelineKey(config) {
-       const key = JSON.stringify({
-          type: config.type,
-          shader: config.shaderURL,
-          format: config.presentationFormat,
-          samples: config.sampleCount,
-          layout: config.bindGroupLayout
-       });
-       return this.pipelineCacheManager._hashString(key);
-    }
-    async createFilterPipeline(filter) {
-       return ErrorHandler.handleAsyncOperation(
-           async () => {
-
-
-              // Create buffers if needed
-              let bufferResource;
-              if (filter.bufferAttachment?.bindings) {
-                 bufferResource = await this.bufferManager.createFilterBuffers(filter);
-              }
-
-              for (const pass of filter.passes) {
-                 const startTime = performance.now();
-                 // Load and cache shader
-                 const shaderCode = await this.loadShader(pass.shaderURL);
-                 const shaderModule = await this.pipelineCacheManager.getShaderModule(shaderCode);
-
-                 // Create bind group layout
-                 const bindGroupLayout = this.createBindGroupLayout(filter, pass);
-
-                 // Create pipeline layout
-                 const pipelineLayout = this.device.createPipelineLayout({
-                    bindGroupLayouts: [bindGroupLayout]
-                 });
-
-                 // Generate a comprehensive pipeline key
-                 const pipelineKey = this._generateDetailedPipelineKey({
-                    type: filter.type,
-                    shaderURL: pass.shaderURL,
-                    presentationFormat: this.presentationFormat,
-                    sampleCount: filter.type === 'compute' ? 1 : 4,
-                    bindGroupLayout: bindGroupLayout.entries
-                 });
-
-                 // Try to get cached pipeline
-                 let pipeline = this.pipelineCacheManager.pipelineCache.get(pipelineKey);
-                 let actualPipeline;
-
-                 const endTime = performance.now();
-                 if (!pipeline) {
-                    if (filter.type === 'compute') {
-                       const computeDescriptor = {
-                          layout: pipelineLayout,
-                          compute: {
-                             module: shaderModule,
-                             entryPoint: 'main'
-                          }
-                       };
-                       actualPipeline = this.device.createComputePipeline(computeDescriptor);
-                    } else {
-                       const renderDescriptor = {
-                          layout: pipelineLayout,
-                          vertex: {
-                             module: shaderModule,
-                             entryPoint: 'vs',
-                             buffers: [
-                                {
-                                   arrayStride: 8,
-                                   attributes: [{ shaderLocation: 0, format: 'float32x2', offset: 0 }]
-                                },
-                                {
-                                   arrayStride: 8,
-                                   attributes: [{ shaderLocation: 1, format: 'float32x2', offset: 0 }]
-                                }
-                             ]
-                          },
-                          fragment: {
-                             module: shaderModule,
-                             entryPoint: 'fs',
-                             targets: [{ format: this.presentationFormat }]
-                          },
-                          multisample: {
-                             count: 4
-                          }
-                       };
-                       actualPipeline = this.device.createRenderPipeline(renderDescriptor);
-                    }
-
-                    this.pipelineCacheManager.pipelineCache.set(pipelineKey, {
-                       pipeline: actualPipeline,
-                       metadata: {
-                          createdAt: Date.now(),
-                          type: filter.type,
-                          shaderURL: pass.shaderURL,
-                          lastUsed: Date.now()
-                       }
-                    });
-                    this.pipelineCacheManager.stats.pipelinesCreated++;
-                    this.pipelineCacheManager.stats.cacheMisses++;
-                    this.pipelineCacheManager._updatePerformanceMetrics({
-                       operationType: 'pipeline',
-                       operation: 'create',
-                       duration: endTime - startTime
-                    });
-                 }
-                 else {
-                    actualPipeline = pipeline.pipeline;
-                    this.pipelineCacheManager.stats.pipelinesReused++;
-                    this.pipelineCacheManager.stats.cacheHits++;
-                    pipeline.metadata.lastUsed = Date.now();
-                    this.pipelineCacheManager._updatePerformanceMetrics({
-                       operationType: 'pipeline',
-                       operation: 'reuse'
-                    });
-                 }
-
-                 pass.pipeline = actualPipeline;
-
-                 // Wait for GPU operations
-                 await this.device.queue.onSubmittedWorkDone();
-
-                 // Create bind group
-                 pass.bindGroup = [this.createBindGroup(bindGroupLayout, filter, pass, bufferResource)];
-              }
-
-              // Cache maintenance
-              await this._performCacheMaintenance();
-
-              if (this.device.label?.includes('debug')) {
-                 console.log('Cache Stats:', {
-                    pipeline: {
-                       ...this.pipelineCacheManager.stats,
-                       cacheSize: this.pipelineCacheManager.pipelineCache.size
-                    },
-                    layout: {
-                       created: this.pipelineCacheManager.stats.layoutsCreated,
-                       reused: this.pipelineCacheManager.stats.layoutsReused,
-                       cacheSize: this.pipelineCacheManager.layoutCache.size
-                    }
-                 });
-              }
-
-              console.log(this.pipelineCacheManager.stats)
-
-              return bufferResource;
-           },
-           `Failed to create pipeline for filter ${filter.label}`
-       );
-    }*/
-
     ////////////////
     _generateDetailedPipelineKey(config) {
         const keyComponents = {
@@ -386,20 +197,12 @@ class PipelineManager {
             } : undefined
         };
 
-        //console.log(this.pipelineCacheManager.stats)
-
         // Generate a deterministic JSON string
         const sortedKey = JSON.stringify(keyComponents, Object.keys(keyComponents).sort());
         return this.pipelineCacheManager._hashString(sortedKey);
     }
 
     createBindGroup(layout, filter, pass, bufferResource) {
-        /*console.log('Creating bind group:', {
-           filterLabel: filter.label,
-           passLabel: pass.label,
-           hasLayout: !!layout,
-           hasBufferResource: !!bufferResource
-        });*/
 
         if (!layout) {
             throw new Error('No layout provided for bind group creation');
@@ -442,14 +245,12 @@ class PipelineManager {
             });
         }
 
-        //console.log('Bind group entries:', entries);
-
         try {
             const bindGroup = this.device.createBindGroup({
                 layout,
                 entries
             });
-            
+
             if (!bindGroup) {
                 throw new Error('Failed to create bind group');
             }
@@ -462,22 +263,30 @@ class PipelineManager {
     }
 
     async createFilterPipeline(filter) {
-        return ErrorHandler.handleAsyncOperation(
-            async () => {
-                let bufferResource;
-                if (filter.bufferAttachment?.bindings) {
-                    bufferResource = await this.bufferManager.createFilterBuffers(filter);
-                }
+        try {
+            let bufferResource;
+            if (filter.bufferAttachment?.bindings) {
+                bufferResource = await this.bufferManager.createFilterBuffers(filter);
+            }
 
-                for (const pass of filter.passes) {
-                    const startTime = performance.now();
+            let hasValidPasses = false; // Track if any passes are valid
 
-                    // Load and cache shader
+            for (const pass of filter.passes) {
+                const startTime = performance.now();
+
+                try {
+                    // Load and cache shader with enhanced error handling
                     const shaderCode = await this.loadShader(pass.shaderURL);
-                    const shaderModule = await this.pipelineCacheManager.getShaderModule(shaderCode);
+                    const shaderModule = await this.pipelineCacheManager.getShaderModule(
+                        shaderCode,
+                        {
+                            label: `${filter.label}_${pass.label || 'pass'}`
+                        }
+                    );
 
-                    // Create bind group layout
+                    // Create bind group layout and pipeline as before...
                     const bindGroupLayout = this.createBindGroupLayout(filter, pass);
+
 
                     // Create pipeline layout
                     const pipelineLayout = this.device.createPipelineLayout({
@@ -575,14 +384,65 @@ class PipelineManager {
 
                     // Wait for GPU operations
                     await this.device.queue.onSubmittedWorkDone();
+
+                    // Mark this pass as valid
+                    hasValidPasses = true;
+
+                } catch (error) {
+                    // Check if this is a shader compilation error
+                    const isShaderError = error.name === 'ShaderCompilationError';
+
+                    // Log detailed error but don't throw
+                    console.error(`Failed to create pipeline for pass '${pass.label}' in filter '${filter.label}':`,
+                        isShaderError ? 'Shader compilation error' : error);
+
+                    // Mark this pass as inactive so we skip it during rendering
+                    pass.active = false;
+
+                    // Use app.debugLogger if available
+                    if (this.app && this.app.debugLogger) {
+                        this.app.debugLogger.error('PipelineCreation',
+                            `Shader compilation failed for ${filter.label}/${pass.label}, pass will be skipped.`,
+                            error);
+                    }
+
+                    // Continue with other passes instead of failing
+                    continue;
                 }
 
-                await this._performCacheMaintenance();
+            }
 
-                return bufferResource;
-            },
-            `Failed to create pipeline for filter ${filter.label}`
-        );
+            // Only throw an error if all passes failed
+            if (!hasValidPasses && filter.passes.length > 0) {
+                throw new Error(`All passes failed for filter ${filter.label}`);
+            }
+
+            await this._performCacheMaintenance();
+
+            return bufferResource;
+        } catch (error) {
+            console.error(`Failed to create pipeline for filter ${filter.label}`, error);
+            throw error;
+        }
+    }
+
+    /**
+     * Determines appropriate fallback shader type based on filter properties
+     * This method is kept for documentation purposes, but fallbacks are not currently used.
+     * @private
+     */
+    _determineFallbackType(filter, pass) {
+        // Implementation remains for documentation purposes
+        if (filter.type === 'compute') {
+            return 'basic-compute';
+        }
+
+        const filterName = filter.label.toLowerCase();
+        if (filterName.includes('gray') || filterName.includes('luma')) {
+            return 'grayscale';
+        }
+
+        return 'basic-render';
     }
 }
 

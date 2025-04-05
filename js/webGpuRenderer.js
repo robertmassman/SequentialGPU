@@ -8,10 +8,8 @@ import Histogram from "./histogram.js";
 import CommandQueueManager from "./commandQueueManager.js";
 import SettingsValidator from './settingsValidator.js';
 import DebugLogger from "./debugLogger.js";
-import ErrorHandler from "./errorHandler.js";
-import RenderManager from "./renderManager.js"; 
 
-export class App {
+export class WebGpuRenderer {
    constructor(settings) {
 
       //// ESSENTIAL SETTINGS BELOW ////
@@ -56,14 +54,7 @@ export class App {
       this.canvas.height = 800;
       this.canvas.id = 'webgpu-canvas';
       this.canvas.style.display = 'none';
-      this.context = undefined
-
-      // Add context lost/restored handlers
-      //this.canvas.addEventListener('webglcontextlost', this._handleContextLost.bind(this), false);
-      //this.canvas.addEventListener('webglcontextrestored', this._handleContextRestored.bind(this), false);
-
-      // Add canvas to document if needed
-      //document.body.appendChild(this.canvas);
+      this.context = undefined;
 
       this.updateManager = new UpdateManager(this);
       this.presentationFormat = settings.presentationFormat || navigator.gpu.getPreferredCanvasFormat(); // Default format
@@ -84,10 +75,6 @@ export class App {
       this.isDisposed = false; // Add disposal flag
       this.debug = settings.debug || false;
 
-
-
-
-
       // Add these to your main app initialization
       window.addEventListener('beforeunload', async (event) => {
          // Ensure cleanup happens before unload
@@ -102,7 +89,7 @@ export class App {
       // Example debug log
       if (settings.debug) {
          this.debugLogger.log('App', 'Initializing with settings:', settings);
-      }
+      };
       // Modify the monitoring interval
       if (settings.debug) {
          this.monitoringInterval = setInterval(() => {
@@ -111,25 +98,9 @@ export class App {
                commandQueue: this.commandQueue?.stats
             });
          }, 10000);
-      }
+      };
+      
    }
-
-
-   async recoverRenderContext() {
-      console.log('Attempting to recover render context');
-      try {
-         await this.dispose();
-         await this.setupDevice();
-         await this.createResources(this.imageArray[this.imageIndex].type === 'Video');
-
-         if (this.renderManager) {
-            this.renderManager.startRender();
-         }
-      } catch (error) {
-         console.error('Failed to recover render context:', error);
-      }
-   }
-
 
    async _cleanup() {
       try {
@@ -300,8 +271,7 @@ export class App {
    }
 
    async loadImageSource(blob) {
-      return ErrorHandler.handleAsyncOperation(
-         async () => {
+      try {
             let imageURL = blob;
 
             // Create image and load it
@@ -315,7 +285,6 @@ export class App {
                   // And only if we created a new blob URL (not for string paths)
                   if (imageURL !== blob && (blob instanceof Blob ||
                      (typeof blob === 'object'))) {
-                     console.log("******  !!!!  REVOKE URL  !!!!  ******");
                      URL.revokeObjectURL(imageURL);
                   }
 
@@ -325,9 +294,10 @@ export class App {
                img.onerror = (error) => reject(error);
                img.src = imageURL;
             });
-         },
-         `Failed to load image URL ${blob}`
-      );
+         } catch (error) {
+            console.error(`Failed to load image URL ${blob}`, error);
+            throw error;
+         }
    }
 
 
@@ -342,19 +312,16 @@ export class App {
     * Resize with proper resource cleanup
     */
    async resize(width, height, resetSize = false) {
-      return ErrorHandler.handleAsyncOperation(
-         async () => {
-            console.log('Starting resize operation');
-            console.log(`Width: ${width}, Height: ${height}, ResetSize: ${resetSize}`);
+      try {
+
+            //console.log('Resizing application from:', this.canvas.width, this.canvas.height, 'to:', width, height, resetSize);
 
             // Wait for GPU to complete pending work
             await this.waitForGPU();
-            console.log('GPU work completed');
 
             // Check if video processor exists and if current file is video
-            let type = this.imageArray[this.imageIndex].type;
-            let isVideo = type === 'Video';
-            console.log("IS VIDEO", isVideo);
+            //let type = this.imageArray[this.imageIndex].type;
+            let isVideo = this.imageArray[this.imageIndex].type === 'Video';
 
             // Get current dimensions based on source type
             const currentWidth = isVideo ? this.videoProcessor.videoElement.videoWidth : this.image.width;
@@ -368,7 +335,6 @@ export class App {
                let heightRatio = height / currentHeight;
                this.ratio = Math.min(widthRatio, heightRatio);
             }
-            console.log(`Ratio set to: ${this.ratio}`);
 
             // Store cache state before resizing
             if (this.pipelineManager) {
@@ -379,11 +345,9 @@ export class App {
                for (const key of activeTextureKeys) {
                   this.textureManager.releaseTexture(key);
                }
-               console.log('Active textures released');
 
                // Recreate resources
                await this.createResources(isVideo);
-               console.log('Resources recreated');
 
                // Restore compatible cached items with new dimensions
                await this.pipelineManager.pipelineCacheManager.restoreCacheState(
@@ -393,82 +357,21 @@ export class App {
                      height: this.canvas.height
                   }
                );
-               console.log('Cache state restored');
             }
             else {
                // If no pipeline manager exists, just create resources
                await this.createResources(isVideo);
             }
 
+            //console.log('Resized canvas to:', this.canvas.width, this.canvas.height, resetSize);
+
             return true;
-         },
-         'Failed to resize application'
-      );
+         } catch (error) {
+            console.error('Failed to resize application:', error);
+            throw error;
+         }
+         
    }
-
-   //// DO NOT DELETE SCALE FUNCTION ////
-   /*async scale(ratio) {
-      try {
-         // Destroy existing textures
-
-         await this.textureManager.destroyTextures();
-
-         this.ratio = ratio;
-
-
-         console.log(this.imageArray[this.imageIndex])
-         let type = this.imageArray[this.imageIndex].type;
-         let isVideo = type === 'Video';
-         // Recreate resources
-         await this.createResources(isVideo);
-         return true;
-      } catch (error) {
-         console.error('Error resizing textures', error);
-      }
-   }*/
-   /*async scale(ratio) {
-      try {
-         // Wait for any pending GPU operations
-         await this.waitForGPU();
-
-         // Store the new ratio
-         this.ratio = ratio;
-
-         // Calculate new dimensions
-         const newWidth = Math.floor(this.image.width * ratio);
-         const newHeight = Math.floor(this.image.height * ratio);
-
-         // Update canvas dimensions
-         this.canvas.width = newWidth;
-         this.canvas.height = newHeight;
-
-         // Reconfigure the context with new dimensions
-         this.context.configure({
-            device: this.device,
-            format: this.presentationFormat,
-            alphaMode: 'premultiplied',
-            size: {
-               width: newWidth,
-               height: newHeight
-            },
-         });
-
-         // Release existing textures
-         await this.textureManager.destroyTextures();
-
-         // Get file type to check if it's a video
-         let type = this.imageArray[this.imageIndex].type;
-         let isVideo = type === 'Video';
-
-         // Recreate resources with new dimensions
-         await this.createResources(isVideo);
-
-         return true;
-      } catch (error) {
-         console.error('Error scaling textures:', error);
-         throw error;
-      }
-   }*/
 
    async clearBuffer(buffer) {
       // Create a temporary buffer to clear the buffer
@@ -904,8 +807,6 @@ export class App {
     */
    async setupDevice() {
       try {
-         //this.adapter = await navigator.gpu.requestAdapter();
-         //this.device = await this.adapter.requestDevice();
 
          // Request adapter with more robust features
          this.adapter = await navigator.gpu.requestAdapter({
@@ -947,6 +848,9 @@ export class App {
          this.textureManager = new TextureManager(this);
 
          this.bindingManager = new BindingManager(this);
+
+        
+
       }
       catch (error) {
          console.error(`Failed to setup device: ${error}`);
@@ -956,219 +860,6 @@ export class App {
    /**
     * Create resources with proper tracking
     */
-   /*async createResources(isVideo = false) {
-
-      console.log(this.imageArray);
-      if(this.imageArray.length === 0){
-         return;
-      }
-      let type = this.imageArray[this.imageIndex].type;
-      console.log(type);
-
-      isVideo = type === 'Video';
-
-
-      let width = isVideo ? this.videoProcessor.videoElement.videoWidth : this.image.width;
-      let height = isVideo ? this.videoProcessor.videoElement.videoHeight : this.image.height;
-
-      let ratio = this.ratio || 1.0;
-      this.canvas.width = width * ratio;
-      this.canvas.height = height * ratio;
-
-
-      try {
-         this.context = this.canvas.getContext('webgpu', { alpha: true });
-      } catch (error) {
-         console.error('Error initializing WebGPU context:', error);
-         throw error;
-      }
-
-      if (!this.device) {
-         await this.setupDevice();
-      }
-
-      try {
-         this.context.configure({
-            device: this.device,
-            format: this.presentationFormat,
-            alphaMode: 'premultiplied',
-            size: {
-               width: this.canvas.width,
-               height: this.canvas.height
-            },
-         });
-
-         // Create textures and track them
-         await this.textureManager.createTextures({
-            textures: this.textures,
-            canvas: {
-               width: this.canvas.width,
-               height: this.canvas.height
-            }
-         });
-
-         console.log(isVideo);
-         // Copy initial frame/image
-         if (isVideo) {
-            await this.textureManager.copyVideoFrameToTexture(
-                this.videoProcessor.videoElement,
-                'texture',
-                {
-                   width: width,
-                   height: height
-                }
-            );
-         } else {
-            await this.textureManager.copyImageToTexture(
-                this.image,
-                'texture',
-                {
-                   width: width,
-                   height: height
-                }
-            );
-         }
-
-         // Create buffers
-         await this.createPositionBuffer();
-         await this.createTexCordBuffer();
-
-         // Initialize managers if needed
-         if (!this.bufferManager) {
-            this.bufferManager = new BufferManager(this.device);
-         }
-         if (!this.pipelineManager) {
-            this.pipelineManager = new PipelineManager(this);
-         }
-         if(!this.commandQueue){
-            this.commandQueue = new CommandQueueManager(this.device);
-         }
-
-         // Create pipelines for all filters
-         for (const [filterName, filter] of Object.entries(this.filters)) {
-            filter.resources = await this.pipelineManager.createFilterPipeline(filter);
-         }
-         // Add debug logging after pipelines are created
-         if (this.debug) {
-            const cacheStats = this.pipelineManager.pipelineCacheManager.getCachePerformance();
-            console.log('Pipeline Cache Performance:', cacheStats);
-         }
-
-      } catch (error) {
-         console.error('Error creating resources:', error);
-         throw error;
-      }
-   }*/
-   /*async createResources(isVideo = false) {
-      if (this.imageArray.length === 0) {
-         return;
-      }
-
-      let type = this.imageArray[this.imageIndex].type;
-      isVideo = type === 'Video';
-
-      // Get original dimensions
-      let originalWidth = isVideo ? this.videoProcessor.videoElement.videoWidth : this.image.width;
-      let originalHeight = isVideo ? this.videoProcessor.videoElement.videoHeight : this.image.height;
-
-
-      // Calculate scaled dimensions
-      //let ratio = this.ratio || 1.0;
-      let ratio = 0.416 || 1.0;
-      let scaledWidth = Math.floor(originalWidth * ratio);
-      let scaledHeight = Math.floor(originalHeight * ratio);
-
-      console.log(originalWidth, originalHeight, scaledWidth, scaledHeight);
-      // Set canvas dimensions to scaled size
-      this.canvas.width = scaledWidth;
-      this.canvas.height = scaledHeight;
-
-      try {
-         this.context = this.canvas.getContext('webgpu', { alpha: true });
-      } catch (error) {
-         console.error('Error initializing WebGPU context:', error);
-         throw error;
-      }
-
-      if (!this.device) {
-         await this.setupDevice();
-      }
-
-      try {
-         // Configure context with scaled dimensions
-         this.context.configure({
-            device: this.device,
-            format: this.presentationFormat,
-            alphaMode: 'premultiplied',
-            size: {
-               width: scaledWidth,
-               height: scaledHeight
-            },
-         });
-
-         // Create textures with scaled dimensions
-         await this.textureManager.createTextures({
-            textures: this.textures,
-            canvas: {
-               width: scaledWidth,
-               height: scaledHeight
-            }
-         });
-
-         console.log(`GOT FILTERS`);
-         // Copy initial frame/image using scaled dimensions
-         if (isVideo) {
-            await this.textureManager.copyVideoFrameToTexture(
-                this.videoProcessor.videoElement,
-                'texture',
-                {
-                   width: scaledWidth,
-                   height: scaledHeight
-                }
-            );
-         }
-         else {
-            await this.textureManager.copyImageToTexture(
-                this.image,
-                'texture',
-                {
-                   width: scaledWidth,
-                   height: scaledHeight
-                }
-            );
-         }
-         // In the createResources method, replace the video handling section with this:
-
-
-         // Create buffers and initialize managers
-         await this.createPositionBuffer();
-         await this.createTexCordBuffer();
-
-         if (!this.bufferManager) {
-            this.bufferManager = new BufferManager(this.device);
-         }
-         if (!this.pipelineManager) {
-            this.pipelineManager = new PipelineManager(this);
-         }
-         if (!this.commandQueue) {
-            this.commandQueue = new CommandQueueManager(this.device);
-         }
-
-         // Create pipelines for all filters
-         for (const [, filter] of Object.entries(this.filters)) {
-            filter.resources = await this.pipelineManager.createFilterPipeline(filter);
-         }
-
-         if (this.debug) {
-            const cacheStats = this.pipelineManager.pipelineCacheManager.getCachePerformance();
-            console.log('Pipeline Cache Performance:', cacheStats);
-         }
-
-      } catch (error) {
-         console.error('Error creating resources:', error);
-         throw error;
-      }
-   }*/
    async createResources(isVideo = false) {
       if (this.imageArray.length === 0) {
          return;
@@ -1190,8 +881,6 @@ export class App {
       // Set canvas dimensions to scaled size
       this.canvas.width = scaledWidth;
       this.canvas.height = scaledHeight;
-
-      console.log('CANVAS CREATION SIZE', this.canvas.width, this.canvas.height);
 
       try {
          this.context = this.canvas.getContext('webgpu', { alpha: true });
@@ -1231,6 +920,8 @@ export class App {
          tempCanvas.height = scaledHeight;
          const tempCtx = tempCanvas.getContext('2d');
          tempCtx.imageSmoothingQuality = 'high';
+
+         //console.log('this image:', this.image);
 
          // Copy and scale initial frame/image
          if (isVideo) {
@@ -1294,6 +985,64 @@ export class App {
       }
    }
 
+   /**
+ * Reports a shader compilation error to the user
+ * @param {Object} errorDetails - The error details object
+ */
+   reportShaderError(errorDetails) {
+      if (!this.debug) return;
+
+      const { label, summary, details, errorCount } = errorDetails;
+
+      // Log to console
+      console.error(`Shader Compilation Error (${label})`, {
+         summary,
+         details,
+         errorCount
+      });
+
+      // Create or update error overlay for immediate user feedback
+      let errorOverlay = document.getElementById('sequentialgpu-error-overlay');
+      if (!errorOverlay) {
+         errorOverlay = document.createElement('div');
+         errorOverlay.id = 'sequentialgpu-error-overlay';
+         errorOverlay.style.cssText = `
+           position: fixed;
+           bottom: 0;
+           left: 0;
+           right: 0;
+           background: rgba(200, 0, 0, 0.85);
+           color: white;
+           padding: 10px;
+           font-family: monospace;
+           max-height: 30vh;
+           overflow: auto;
+           z-index: 10000;
+           white-space: pre-wrap;
+           border-top: 2px solid #ff0000;
+       `;
+         document.body.appendChild(errorOverlay);
+      }
+
+      // Update content
+      errorOverlay.innerHTML = `
+       <h3>Shader Error: ${label}</h3>
+       <div>${details.map(d => `<div>${d}</div>`).join('')}</div>
+       <button style="margin-top: 10px; padding: 5px 10px; background: #333; border: none; color: white; cursor: pointer;">
+           Dismiss
+       </button>
+   `;
+
+      // Add dismiss button handler
+      errorOverlay.querySelector('button').onclick = () => {
+         errorOverlay.style.display = 'none';
+      };
+
+      // Auto-hide after 15 seconds
+      setTimeout(() => {
+         if (errorOverlay) errorOverlay.style.display = 'none';
+      }, 15000);
+   }
 
    /**
     * Initialize the program
@@ -1304,9 +1053,6 @@ export class App {
 
          // Validate settings before proceeding with initialization
          SettingsValidator.validateSettings(this);
-         console.log(this)
-         console.log("IMAGE INDEX ", this.imageIndex)
-         console.log(this.imageArray)
 
          try {
             if (this.imageArray.length > 0) {
@@ -1339,4 +1085,4 @@ export class App {
 
 }
 
-export default App;
+export default WebGpuRenderer;

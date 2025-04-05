@@ -1,7 +1,5 @@
 import SimpleTexturePool from "./simpleTexturePool.js";
 
-import ErrorHandler from "./errorHandler.js";
-
 class TextureManager {
     constructor(app) {
         this.device = app.device;
@@ -103,43 +101,37 @@ class TextureManager {
     }
 
     getTexture(key) {
-        const texture = this.activeTextures.get(key);
-        ErrorHandler.validateTexture(
-            key,
-            texture,
-            Array.from(this.activeTextures.keys())
-        );
-        return texture;
+        try {
+
+            const texture = this.activeTextures.get(key);
+            return texture;
+
+        } catch (error) {
+            console.error(`Error getting texture "${key}" not found. Available textures keys include: ${texture}, ${Array.from(this.activeTextures.keys()).join(', ')}:`, error);
+            throw error;
+        }
     }
 
     async copyImageToTexture(image, textureKey, dimensions) {
-        return ErrorHandler.handleAsyncOperation(
-            async () => {
-                const canvas = document.createElement('canvas');
-                canvas.width = dimensions.width;
-                canvas.height = dimensions.height;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-                const imageBitmap = await createImageBitmap(canvas);
+        try {
+            const canvas = document.createElement('canvas');
+            canvas.width = dimensions.width;
+            canvas.height = dimensions.height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+            const imageBitmap = await createImageBitmap(canvas);
 
-                const texture = this.getTexture(textureKey);
-                this.device.queue.copyExternalImageToTexture(
-                    { source: imageBitmap, flipY: false },
-                    { texture },
-                    dimensions
-                );
-            },
-            `Failed to copy image to texture ${textureKey}`
-        );
+            const texture = this.getTexture(textureKey);
+            this.device.queue.copyExternalImageToTexture(
+                { source: imageBitmap, flipY: false },
+                { texture },
+                dimensions
+            );
+        } catch (error) {
+            console.error(`Failed to copy image to texture ${textureKey}`, error);
+            throw error;
+        }
     }
-
-    // In your TextureManager class
-    /*releaseAllTextures() {
-        // Clear texture cache and release resources
-        this.textureCache = {};
-        this.activeTextures.clear();
-        console.log('All textures released');
-    }*/
 
     async destroyTextures() {
         // Release all active textures back to pool
