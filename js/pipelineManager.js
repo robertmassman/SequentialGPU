@@ -7,7 +7,7 @@ class PipelineManager {
         this.bufferManager = app.bufferManager;
         this.textureManager = app.textureManager;
         this.shaderCache = new Map();
-        this.pipelineCacheManager = new PipelineCacheManager(this.device);
+        this.pipelineCacheManager = new PipelineCacheManager(app);
     }
 
     async loadShader(url) {
@@ -421,9 +421,30 @@ class PipelineManager {
 
             return bufferResource;
         } catch (error) {
+            // Check if it's a shader compilation error
+            if (error.name === 'ShaderCompilationError') {
+                // Format error for display
+                const errorDetails = {
+                    label: filter.label || 'Unknown Shader',
+                    summary: error.message,
+                    details: this._parseShaderErrorMessage(error.message),
+                    errorCount: 1
+                };
+            }
             console.error(`Failed to create pipeline for filter ${filter.label}`, error);
             throw error;
         }
+    }
+
+    // Helper to parse shader error messages into structured format
+    _parseShaderErrorMessage(message) {
+        // Split message by lines
+        const lines = message.split('\n');
+        // Extract relevant parts and format for display
+        return lines.map(line => {
+            // Remove any ansi color codes and format nicely
+            return line.replace(/\x1b\[\d+m/g, '');
+        });
     }
 
     /**

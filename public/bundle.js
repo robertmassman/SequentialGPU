@@ -1,6 +1,8 @@
 class PipelineCacheManager {
-    constructor(device) {
-        this.device = device;
+    constructor(app) {
+        this.app = app; // Store reference to app
+        this.device = app.device;
+        
         this.shaderCache = new Map();
         this.pipelineCache = new Map();
         this.layoutCache = new Map();
@@ -231,19 +233,16 @@ class PipelineCacheManager {
                     throw error;
                 }
             } catch (error) {
-                if (error.name === 'ShaderCompilationError') {
-                    // This is our formatted error, so just rethrow it
-                    throw error;
-                }
 
-                // For other unexpected errors
-                console.error('Unexpected shader compilation error:', error);
-
-                // Create a generic shader error
-                const genericError = new Error(`Unexpected error compiling shader: ${error.message}`);
-                genericError.name = 'ShaderCompilationError';
-                genericError.originalError = error;
-                throw genericError;
+                const errorInfo = {
+                    label: label || shaderURL,
+                    summary: `Failed to compile shader: ${error.message}`,
+                    details: this._formatErrorDetails(error),
+                    errorCount: 1
+                };
+                
+                // Rethrow to allow graceful handling upstream
+                throw new Error(`ShaderCompilationError: ${errorInfo}`);
             }
 
             const duration = performance.now() - startTime;
@@ -262,6 +261,17 @@ class PipelineCacheManager {
 
         this.lruList.set(shaderKey, Date.now());
         return this.shaderCache.get(shaderKey);
+    }
+
+    _formatErrorDetails(error) {
+        // Format details array with line numbers if available
+        if (error.lineNum && error.linePos) {
+            return [
+                `Error at line ${error.lineNum}, position ${error.linePos}`,
+                error.message
+            ];
+        }
+        return [error.message];
     }
 
     /**
@@ -351,7 +361,7 @@ class PipelineManager {
         this.bufferManager = app.bufferManager;
         this.textureManager = app.textureManager;
         this.shaderCache = new Map();
-        this.pipelineCacheManager = new PipelineCacheManager(this.device);
+        this.pipelineCacheManager = new PipelineCacheManager(app);
     }
 
     async loadShader(url) {
@@ -765,9 +775,30 @@ class PipelineManager {
 
             return bufferResource;
         } catch (error) {
+            // Check if it's a shader compilation error
+            if (error.name === 'ShaderCompilationError') {
+                // Format error for display
+                ({
+                    label: filter.label || 'Unknown Shader',
+                    summary: error.message,
+                    details: this._parseShaderErrorMessage(error.message),
+                    errorCount: 1
+                });
+            }
             console.error(`Failed to create pipeline for filter ${filter.label}`, error);
             throw error;
         }
+    }
+
+    // Helper to parse shader error messages into structured format
+    _parseShaderErrorMessage(message) {
+        // Split message by lines
+        const lines = message.split('\n');
+        // Extract relevant parts and format for display
+        return lines.map(line => {
+            // Remove any ansi color codes and format nicely
+            return line.replace(/\x1b\[\d+m/g, '');
+        });
     }
 
     /**
@@ -2669,7 +2700,7 @@ class WebGpuRenderer {
                commandQueue: this.commandQueue?.stats
             });
          }, 10000);
-      }      
+      }
    }
 
    async _cleanup() {
@@ -2705,12 +2736,6 @@ class WebGpuRenderer {
          if (this.videoProcessor) {
             this.videoProcessor.dispose();
             this.videoProcessor = null;
-         }
-
-         // Stop render manager
-         if (this.renderManager) {
-            this.renderManager.cleanup();
-            this.renderManager = null;
          }
 
          // Clear command queue
@@ -2842,32 +2867,32 @@ class WebGpuRenderer {
 
    async loadImageSource(blob) {
       try {
-            let imageURL = blob;
+         let imageURL = blob;
 
-            // Create image and load it
-            const img = new Image();
+         // Create image and load it
+         const img = new Image();
 
-            return new Promise((resolve, reject) => {
-               img.onload = () => {
-                  this.image = img;
+         return new Promise((resolve, reject) => {
+            img.onload = () => {
+               this.image = img;
 
-                  // Only revoke the URL AFTER the image has loaded successfully
-                  // And only if we created a new blob URL (not for string paths)
-                  if (imageURL !== blob && (blob instanceof Blob ||
-                     (typeof blob === 'object'))) {
-                     URL.revokeObjectURL(imageURL);
-                  }
+               // Only revoke the URL AFTER the image has loaded successfully
+               // And only if we created a new blob URL (not for string paths)
+               if (imageURL !== blob && (blob instanceof Blob ||
+                  (typeof blob === 'object'))) {
+                  URL.revokeObjectURL(imageURL);
+               }
 
-                  resolve(img);
-               };
+               resolve(img);
+            };
 
-               img.onerror = (error) => reject(error);
-               img.src = imageURL;
-            });
-         } catch (error) {
-            console.error(`Failed to load image URL ${blob}`, error);
-            throw error;
-         }
+            img.onerror = (error) => reject(error);
+            img.src = imageURL;
+         });
+      } catch (error) {
+         console.error(`Failed to load image URL ${blob}`, error);
+         throw error;
+      }
    }
 
 
@@ -2884,63 +2909,66 @@ class WebGpuRenderer {
    async resize(width, height, resetSize = false) {
       try {
 
-            //console.log('Resizing application from:', this.canvas.width, this.canvas.height, 'to:', width, height, resetSize);
-
-            // Wait for GPU to complete pending work
-            await this.waitForGPU();
-
-            // Check if video processor exists and if current file is video
-            //let type = this.imageArray[this.imageIndex].type;
-            let isVideo = this.imageArray[this.imageIndex].type === 'Video';
-
-            // Get current dimensions based on source type
-            const currentWidth = isVideo ? this.videoProcessor.videoElement.videoWidth : this.image.width;
-            const currentHeight = isVideo ? this.videoProcessor.videoElement.videoHeight : this.image.height;
-
-            // Calculate new ratio
-            if (!resetSize) {
-               this.ratio = 1.0;
-            } else {
-               let widthRatio = width / currentWidth;
-               let heightRatio = height / currentHeight;
-               this.ratio = Math.min(widthRatio, heightRatio);
-            }
-
-            // Store cache state before resizing
-            if (this.pipelineManager) {
-               const pipelineCacheState = this.pipelineManager.pipelineCacheManager.storeCacheState();
-
-               // Release all active textures back to the pool
-               const activeTextureKeys = Array.from(this.textureManager.activeTextures.keys());
-               for (const key of activeTextureKeys) {
-                  this.textureManager.releaseTexture(key);
-               }
-
-               // Recreate resources
-               await this.createResources(isVideo);
-
-               // Restore compatible cached items with new dimensions
-               await this.pipelineManager.pipelineCacheManager.restoreCacheState(
-                  pipelineCacheState,
-                  {
-                     width: this.canvas.width,
-                     height: this.canvas.height
-                  }
-               );
-            }
-            else {
-               // If no pipeline manager exists, just create resources
-               await this.createResources(isVideo);
-            }
-
-            //console.log('Resized canvas to:', this.canvas.width, this.canvas.height, resetSize);
-
-            return true;
-         } catch (error) {
-            console.error('Failed to resize application:', error);
-            throw error;
+         if (this.debug) {
+            console.log('Resizing application from:', this.canvas.width, this.canvas.height, 'to:', width, height, resetSize);
          }
-         
+
+         // Wait for GPU to complete pending work
+         await this.waitForGPU();
+
+         // Check if video processor exists and if current file is video
+         let isVideo = this.imageArray[this.imageIndex].type === 'Video';
+
+         // Get current dimensions based on source type
+         const currentWidth = isVideo ? this.videoProcessor.videoElement.videoWidth : this.image.width;
+         const currentHeight = isVideo ? this.videoProcessor.videoElement.videoHeight : this.image.height;
+
+         // Calculate new ratio
+         if (!resetSize) {
+            this.ratio = 1.0;
+         } else {
+            let widthRatio = width / currentWidth;
+            let heightRatio = height / currentHeight;
+            this.ratio = Math.min(widthRatio, heightRatio);
+         }
+
+         // Store cache state before resizing
+         if (this.pipelineManager) {
+            const pipelineCacheState = this.pipelineManager.pipelineCacheManager.storeCacheState();
+
+            // Release all active textures back to the pool
+            const activeTextureKeys = Array.from(this.textureManager.activeTextures.keys());
+            for (const key of activeTextureKeys) {
+               this.textureManager.releaseTexture(key);
+            }
+
+            // Recreate resources
+            await this.createResources(isVideo);
+
+            // Restore compatible cached items with new dimensions
+            await this.pipelineManager.pipelineCacheManager.restoreCacheState(
+               pipelineCacheState,
+               {
+                  width: this.canvas.width,
+                  height: this.canvas.height
+               }
+            );
+         }
+         else {
+            // If no pipeline manager exists, just create resources
+            await this.createResources(isVideo);
+         }
+
+         if (this.debug) {
+            console.log('Resized canvas to:', this.canvas.width, this.canvas.height, resetSize);
+         }
+
+         return true;
+      } catch (error) {
+         console.error('Failed to resize application:', error);
+         throw error;
+      }
+
    }
 
    async clearBuffer(buffer) {
@@ -3015,9 +3043,6 @@ class WebGpuRenderer {
 
          // Cleanup
          readBackBuffer.unmap();
-
-         // Clear the combinedBuffer after using it
-         //await this.clearBuffer(sourceBuffer);
 
          return histogram;
       } finally {
@@ -3273,11 +3298,14 @@ class WebGpuRenderer {
       if (type === 'compute') {
          // Get histogram filter and validate
          const histogramFilter = this.filters.histogramCompute;
+         
          if (!histogramFilter?.resources?.buffer) {
             throw new Error('Histogram buffer not initialized');
          }
+
          const sourceBuffer = histogramFilter.resources.buffers?.histogram ||
             histogramFilter.resources.buffer;
+
          // Clear the combinedBuffer before rewriting to is using it
          await this.clearBuffer(sourceBuffer);
 
@@ -3419,7 +3447,7 @@ class WebGpuRenderer {
 
          this.bindingManager = new BindingManager(this);
 
-        
+
 
       }
       catch (error) {
@@ -3553,65 +3581,6 @@ class WebGpuRenderer {
          console.error('Error creating resources:', error);
          throw error;
       }
-   }
-
-   /**
- * Reports a shader compilation error to the user
- * @param {Object} errorDetails - The error details object
- */
-   reportShaderError(errorDetails) {
-      if (!this.debug) return;
-
-      const { label, summary, details, errorCount } = errorDetails;
-
-      // Log to console
-      console.error(`Shader Compilation Error (${label})`, {
-         summary,
-         details,
-         errorCount
-      });
-
-      // Create or update error overlay for immediate user feedback
-      let errorOverlay = document.getElementById('sequentialgpu-error-overlay');
-      if (!errorOverlay) {
-         errorOverlay = document.createElement('div');
-         errorOverlay.id = 'sequentialgpu-error-overlay';
-         errorOverlay.style.cssText = `
-           position: fixed;
-           bottom: 0;
-           left: 0;
-           right: 0;
-           background: rgba(200, 0, 0, 0.85);
-           color: white;
-           padding: 10px;
-           font-family: monospace;
-           max-height: 30vh;
-           overflow: auto;
-           z-index: 10000;
-           white-space: pre-wrap;
-           border-top: 2px solid #ff0000;
-       `;
-         document.body.appendChild(errorOverlay);
-      }
-
-      // Update content
-      errorOverlay.innerHTML = `
-       <h3>Shader Error: ${label}</h3>
-       <div>${details.map(d => `<div>${d}</div>`).join('')}</div>
-       <button style="margin-top: 10px; padding: 5px 10px; background: #333; border: none; color: white; cursor: pointer;">
-           Dismiss
-       </button>
-   `;
-
-      // Add dismiss button handler
-      errorOverlay.querySelector('button').onclick = () => {
-         errorOverlay.style.display = 'none';
-      };
-
-      // Auto-hide after 15 seconds
-      setTimeout(() => {
-         if (errorOverlay) errorOverlay.style.display = 'none';
-      }, 15000);
    }
 
    /**

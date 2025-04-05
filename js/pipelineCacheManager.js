@@ -1,6 +1,8 @@
 class PipelineCacheManager {
-    constructor(device) {
-        this.device = device;
+    constructor(app) {
+        this.app = app; // Store reference to app
+        this.device = app.device;
+        
         this.shaderCache = new Map();
         this.pipelineCache = new Map();
         this.layoutCache = new Map();
@@ -231,19 +233,16 @@ class PipelineCacheManager {
                     throw error;
                 }
             } catch (error) {
-                if (error.name === 'ShaderCompilationError') {
-                    // This is our formatted error, so just rethrow it
-                    throw error;
-                }
 
-                // For other unexpected errors
-                console.error('Unexpected shader compilation error:', error);
-
-                // Create a generic shader error
-                const genericError = new Error(`Unexpected error compiling shader: ${error.message}`);
-                genericError.name = 'ShaderCompilationError';
-                genericError.originalError = error;
-                throw genericError;
+                const errorInfo = {
+                    label: label || shaderURL,
+                    summary: `Failed to compile shader: ${error.message}`,
+                    details: this._formatErrorDetails(error),
+                    errorCount: 1
+                };
+                
+                // Rethrow to allow graceful handling upstream
+                throw new Error(`ShaderCompilationError: ${errorInfo}`);
             }
 
             const duration = performance.now() - startTime;
@@ -262,6 +261,17 @@ class PipelineCacheManager {
 
         this.lruList.set(shaderKey, Date.now());
         return this.shaderCache.get(shaderKey);
+    }
+
+    _formatErrorDetails(error) {
+        // Format details array with line numbers if available
+        if (error.lineNum && error.linePos) {
+            return [
+                `Error at line ${error.lineNum}, position ${error.linePos}`,
+                error.message
+            ];
+        }
+        return [error.message];
     }
 
     /**
