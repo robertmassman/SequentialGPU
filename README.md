@@ -62,9 +62,14 @@ const settings = {
             type: 'fragment', // or 'compute' for compute shaders
             passes: [
                 {
+                    label: 'Filter 1 Pass 1',
                     active: true, // Individual pass can be enabled/disabled
                     inputTexture: ['texture'],
-                    outputTexture: 'textureTemp',
+                     // Note you do want to create a texture called 'texture' 
+                     // in your textures object. This is created by SequentialGPU 
+                     // and is used by you to load the image texture into your filter 
+                     // at a place of your choosing.
+                    outputTexture: 'textureOUT',
                     shaderURL: 'path/to/shader.wgsl'
                 }
             ],
@@ -90,8 +95,9 @@ const settings = {
             type: 'compute',
             passes: [
                 {
+                    label: 'Filter 2 Pass 1',
                     active: true,
-                    inputTexture: ['texture'],
+                    inputTexture: ['textureOUT'],
                     shaderURL: 'path/to/compute.wgsl'
                 }
             ],
@@ -106,7 +112,56 @@ const settings = {
                     }
                 }
             }
-        }
+        },
+        filter3Fragment: { // Example fragment shader with 3 passes and drawing to the screen
+            active: true,
+            type: 'fragment',
+            passes: [
+                {
+                    label: 'Filter 3 Pass 1',
+                    active: true, // Individual pass can be enabled/disabled
+                    inputTexture: ['textureIN'],
+                    outputTexture: 'textureOUT',
+                    shaderURL: 'path/to/shader.wgsl'
+                },
+                {
+                    label: 'Filter 3 Pass 2',
+                    inputTexture: ['textureOUT'],
+                     // you may use the output texture from the previous pass 
+                     // as the input texture for the next pass. SequentialGPU 
+                     // will automaticly swap in a texture called 'textureTemp' 
+                     // as a stand in so that 'textureOUT' be used as input and output.
+                    outputTexture: 'textureOUT',
+                    shaderURL: 'path/to/shader.wgsl'
+                },
+                {
+                    label: 'Filter 3 Pass 3',
+                    inputTexture: ['textureOUT'],
+                    outputTexture: undefined,
+                     // Setting the outputTexture to 'undefined' allows the 
+                     // filters output to be drawn to the screen.
+                     // Note that once this happens all preceding filters 
+                     // will not be rendered.
+                    shaderURL: 'path/to/shader.wgsl'
+                }
+            ],
+            bufferAttachment: {
+                groupIndex: 0,
+                bindingIndex: 3, // Must be 3 =>
+                bindings: {
+                    uniformValue: {
+                        type: 'uniform',
+                        value: 255,
+                        usage: 'read',
+                    },
+                    floatArray: {
+                        type: 'float',
+                        value: [0, 0, 0, 0],
+                        usage: 'read',
+                    }
+                }
+            }
+        },
     }
 };
 
@@ -146,13 +201,13 @@ const isScreenRender = await app.renderFilterPasses(filter);
 
 ### Important Notes
 
-1. Please note that the first filters input texture should be set to the texture. The app will automatically set the input image to this texture. you should not use it as an output texture.
+1. Please note that the first filters input texture should be set to 'texture'. The app will automatically set the input image to this. You should not use 'texture' as an output texture.
 
 2. `shaderURL` property in the `passes` object should be the path to the shader file. The shader file should contain the shader code in WGSL format.
 
-3. `bufferAttachment` object should contain the buffer attachment settings for the filter. The `groupIndex` and `bindingIndex` properties should be set to the group and binding indices of the buffer attachment in the shader.
+3. `bufferAttachment` object should contain the buffer attachment settings for the filter. The `groupIndex` and `bindingIndex` properties should be set to the group and binding indices of the buffer attachment in the shader. NOTE `bindingIndex: 3` Is reserved for buffer attachment settings and is recomended for usage of all bufferAttachment however please remember to use uniqe names for all attachments. When updating a bufferAttachment SequentialGPU looks for all filters using the `key` of the bufferAttachment and updates the values for that filter.
 
-4. `textures` object should contain the texture `key/name` followed by the texture parameters. 
+4. `textures` object should contain the unique texture `key/name` followed by the texture parameters all of which are optional. 
    - `label` [optional] property used to label of the texture.
    - `format` [optional] default is the apps format defined in the setting object like this `rgba8unorm`. Otherwise, you can specify the format of the texture `rgba8unorm | rgba16float | rgba32float | r8unorm | r16float | r32float`.
    - `usage` [optional] property should be set to the usage of the texture. `GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST`
