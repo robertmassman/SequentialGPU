@@ -13,8 +13,9 @@ npm-debug.log*
 # npm configuration with potential tokens
 .npmrc
 
-# Build artifacts
-# ... any other files you want to ignore
+# DO NOT ignore these build artifacts
+# public/bundle.js
+# public/bundle.js.map
 
 # OS files
 .DS_Store

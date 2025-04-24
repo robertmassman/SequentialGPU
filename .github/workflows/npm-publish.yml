@@ -16,9 +16,8 @@ jobs:
         with:
           node-version: '20.x'
           registry-url: 'https://registry.npmjs.org'
-      - run: npm ci --no-optional
-      # Build and publish
-      - run: npm run compile
-      - run: npm publish
+      
+      # Skip build step - just publish pre-built files
+      - run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{secrets.NPM_TOKEN}}
