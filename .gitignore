@@ -1,0 +1,20 @@
+# Node modules
+node_modules/
+cat > .gitignore << EOF
+# Node modules
+node_modules/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# IDE files
+.idea/
+.vscode/
+
+# npm configuration with potential tokens
+.npmrc
+
+# Build artifacts
+# ... any other files you want to ignore

@@ -1,0 +1,43 @@
+{
+  "name": "@robertmassman/sequentialgpu",
+  "version": "0.0.2",
+  "description": "A webGPU image processing implementation for rendering filter and their passes in sequence",
+  "main": "public/bundle.js",
+  "files": [
+    "public/bundle.js",
+    "public/bundle.js.map"
+  ],
+  "type": "module",
+  "keywords": [
+    "webgpu",
+    "sequential",
+    "image processing",
+    "gpu",
+    "webgpu",
+    "filter",
+    "pass"
+  ],
+  "author": {
+    "name": "Robert Massman",
+    "url": "https://github.com/robertmassman",
+    "email": "robert@robertmassman.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/robertmassman/sequentialgpu.git"
+  },
+  "scripts": {
+    "compile": "rollup -c",
+    "mapCompile": "npx rollup -c --environment SOURCE_MAP:true"
+  },
+  "license": "ISC",
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^28.0.1",
+    "@rollup/plugin-node-resolve": "^15.3.0",
+    "@rollup/rollup-darwin-arm64": "^4.27.1",
+    "rollup": "^4.27.4"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
