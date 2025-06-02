@@ -1,6 +1,6 @@
 {
   "name": "@robertmassman/sequentialgpu",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "A webGPU image processing implementation for rendering filter and their passes in sequence",
   "main": "public/bundle.js",
   "files": [
