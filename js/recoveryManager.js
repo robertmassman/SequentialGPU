@@ -104,11 +104,6 @@ class RecoveryManager {
                 }
             }, 2000);
 
-            console.log('Attempting to recover WebGPU context...');
-
-            // Stop any active rendering to prevent further errors
-            this.isRendering = false;
-
             // Clean up resources but don't mark as disposed yet
             await this._cleanupResources();
 

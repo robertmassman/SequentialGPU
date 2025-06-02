@@ -1,8 +1,368 @@
+/**
+ * Centralized utility class for common WebGPU operations
+ * Eliminates code duplication across managers
+ */
+class GPUUtils {
+    // Static hash function used across the codebase
+    static hashString(str) {
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            const char = str.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash;
+        }
+        return hash.toString(36);
+    }
+
+    /**
+     * Creates a standard sampler with consistent settings
+     * @param {GPUDevice} device - WebGPU device
+     * @param {Object} options - Optional sampler configuration
+     * @returns {GPUSampler} Configured sampler
+     */
+    static createStandardSampler(device, options = {}) {
+        return device.createSampler({
+            magFilter: options.magFilter || 'linear',
+            minFilter: options.minFilter || 'linear',
+            wrapU: options.wrapU || 'clamp-to-edge',
+            wrapV: options.wrapV || 'clamp-to-edge',
+            ...options
+        });
+    }
+
+    /**
+     * Generates a consistent bind group layout key
+     * @param {Object} filter - Filter configuration
+     * @param {Object} pass - Pass configuration
+     * @returns {string} Hashed layout key
+     */
+    static generateBindGroupLayoutKey(filter, pass) {
+        const keyComponents = {
+            type: filter.type,
+            inputTextureCount: pass.inputTexture?.length || 0,
+            hasBuffer: !!filter.bufferAttachment?.bindings,
+            bufferType: filter.type === 'compute' ? 'storage' : 'uniform',
+            bindingIndex: filter.bufferAttachment?.bindingIndex
+        };
+        return this.hashString(JSON.stringify(keyComponents));
+    }
+
+    /**
+     * Generates a detailed pipeline key for caching
+     * @param {Object} config - Pipeline configuration
+     * @returns {string} Hashed pipeline key
+     */
+    static generatePipelineKey(config) {
+        const keyComponents = {
+            type: config.type,
+            shader: config.shaderURL,
+            format: config.presentationFormat,
+            sampleCount: config.sampleCount,
+            layoutEntries: config.bindGroupLayout?.map(entry => ({
+                binding: entry.binding,
+                visibility: entry.visibility,
+                bufferType: entry.buffer?.type,
+                textureFormat: entry.texture?.format,
+                samplerType: entry.sampler?.type,
+                viewDimension: entry.texture?.viewDimension
+            })),
+            vertex: config.type !== 'compute' ? {
+                buffers: [
+                    {
+                        arrayStride: 8,
+                        stepMode: 'vertex',
+                        attributes: [
+                            { format: 'float32x2', offset: 0, shaderLocation: 0 }
+                        ]
+                    },
+                    {
+                        arrayStride: 8,
+                        stepMode: 'vertex',
+                        attributes: [
+                            { format: 'float32x2', offset: 0, shaderLocation: 1 }
+                        ]
+                    }
+                ],
+                entryPoint: 'vs'
+            } : undefined,
+            fragment: config.type !== 'compute' ? {
+                targets: [{ format: config.presentationFormat }],
+                entryPoint: 'fs'
+            } : undefined,
+            compute: config.type === 'compute' ? {
+                entryPoint: 'main'
+            } : undefined,
+            multisample: config.type !== 'compute' ? {
+                count: config.sampleCount,
+                mask: 0xFFFFFFFF,
+                alphaToCoverageEnabled: false
+            } : undefined
+        };
+
+        const sortedKey = JSON.stringify(keyComponents, Object.keys(keyComponents).sort());
+        return this.hashString(sortedKey);
+    }
+
+    /**
+     * Creates standardized bind group entries
+     * @param {Object} options - Configuration options
+     * @returns {Array} Bind group entries array
+     */
+    static createStandardBindGroupEntries(options) {
+        const {
+            device,
+            textureManager,
+            filter,
+            pass,
+            bufferResource,
+            visibility = filter.type === 'compute' ? GPUShaderStage.COMPUTE : GPUShaderStage.FRAGMENT
+        } = options;
+
+        const entries = [];
+
+        // Add sampler binding (always binding 0)
+        entries.push({
+            binding: 0,
+            resource: this.createStandardSampler(device)
+        });
+
+        // Add texture bindings
+        if (pass.inputTexture?.length) {
+            pass.inputTexture.forEach((textureName, index) => {
+                const textureView = textureManager.getTexture(textureName)?.createView();
+                if (!textureView) {
+                    throw new Error(`Texture ${textureName} not found`);
+                }
+                entries.push({
+                    binding: index + 1,
+                    resource: textureView
+                });
+            });
+        }
+
+        // Add buffer binding if needed
+        if (filter.bufferAttachment?.bindings && bufferResource?.buffer) {
+            entries.push({
+                binding: filter.bufferAttachment.bindingIndex || 3,
+                resource: {
+                    buffer: bufferResource.buffer,
+                    offset: 0,
+                    size: bufferResource.buffer.size
+                }
+            });
+        }
+
+        return entries;
+    }
+
+    /**
+     * Creates standardized bind group layout entries
+     * @param {Object} options - Configuration options
+     * @returns {Array} Layout entries array
+     */
+    static createStandardLayoutEntries(options) {
+        const {
+            filter,
+            pass,
+            visibility = filter.type === 'compute' ? GPUShaderStage.COMPUTE : GPUShaderStage.FRAGMENT
+        } = options;
+
+        const entries = [];
+
+        // Add sampler binding
+        entries.push({
+            binding: 0,
+            visibility,
+            sampler: { type: 'filtering' }
+        });
+
+        // Add texture bindings
+        if (pass.inputTexture && Array.isArray(pass.inputTexture)) {
+            pass.inputTexture.forEach((_, index) => {
+                entries.push({
+                    binding: index + 1,
+                    visibility,
+                    texture: { sampleType: 'float' }
+                });
+            });
+        }
+
+        // Add buffer binding if needed
+        if (filter.bufferAttachment?.bindings) {
+            entries.push({
+                binding: filter.bufferAttachment.bindingIndex || 3,
+                visibility,
+                buffer: {
+                    type: filter.type === 'compute' ? 'storage' : 'uniform'
+                }
+            });
+        }
+
+        return entries;
+    }
+
+    /**
+     * Standardized error handling with consistent formatting
+     * @param {string} component - Component name where error occurred
+     * @param {string} operation - Operation that failed
+     * @param {Error} error - The error object
+     * @param {Object} context - Additional context information
+     */
+    static handleError(component, operation, error, context = {}) {
+        const timestamp = new Date().toISOString();
+        const errorInfo = {
+            timestamp,
+            component,
+            operation,
+            message: error.message,
+            context
+        };
+
+        console.error(`[${timestamp}] [${component}] Failed ${operation}:`, errorInfo);
+        
+        // Return standardized error for upstream handling
+        const standardError = new Error(`${component}: ${operation} failed - ${error.message}`);
+        standardError.originalError = error;
+        standardError.context = context;
+        return standardError;
+    }
+
+    /**
+     * Validates texture format compatibility
+     * @param {string} format - Texture format to validate
+     * @returns {boolean} Whether format is valid
+     */
+    static validateTextureFormat(format) {
+        const validFormats = [
+            'rgba8unorm', 'rgba8unorm-srgb', 'rgba8snorm',
+            'rgba16float', 'rgba32float',
+            'bgra8unorm', 'bgra8unorm-srgb',
+            'r8unorm', 'rg8unorm', 'rg16float', 'rg32float'
+        ];
+        return validFormats.includes(format);
+    }
+
+    /**
+     * Calculates appropriate buffer size with alignment
+     * @param {number} size - Desired buffer size
+     * @param {number} alignment - Alignment requirement (default: 16)
+     * @returns {number} Aligned buffer size
+     */
+    static calculateAlignedBufferSize(size, alignment = 16) {
+        return Math.ceil(size / alignment) * alignment;
+    }
+
+    /**
+     * Creates a tracked buffer with consistent settings
+     * @param {GPUDevice} device - WebGPU device
+     * @param {Object} descriptor - Buffer descriptor
+     * @param {Set} resourceTracker - Resource tracking set
+     * @returns {GPUBuffer} Created buffer
+     */
+    static createTrackedBuffer(device, descriptor, resourceTracker = null) {
+        const buffer = device.createBuffer(descriptor);
+        
+        if (resourceTracker) {
+            resourceTracker.add(buffer);
+        }
+        
+        return buffer;
+    }
+
+    /**
+     * Formats shader compilation errors consistently
+     * @param {Array} errors - Array of compilation errors
+     * @param {string} code - Shader source code
+     * @param {string} label - Shader label
+     * @returns {Object} Formatted error information
+     */
+    static formatShaderErrors(errors, code, label) {
+        const lines = code.split('\n');
+        const formattedErrors = errors.map(error => this.formatShaderMessage(error, lines));
+
+        return {
+            summary: errors.map(e => e.message).join('\n'),
+            details: formattedErrors,
+            errorCount: errors.length,
+            label
+        };
+    }
+
+    /**
+     * Formats a single shader compilation message with context
+     * @param {Object} message - Compilation message
+     * @param {Array} codeLines - Source code lines
+     * @returns {string} Formatted message
+     */
+    static formatShaderMessage(message, codeLines = []) {
+        const { lineNum, linePos, offset, length, message: msg, type } = message;
+
+        let formattedMsg = `[${type.toUpperCase()}] Line ${lineNum}:${linePos} - ${msg}`;
+
+        if (codeLines.length > 0 && lineNum > 0 && lineNum <= codeLines.length) {
+            const line = codeLines[lineNum - 1];
+            const pointer = ' '.repeat(linePos - 1) + '^'.repeat(Math.max(1, length));
+            formattedMsg += `\n${line}\n${pointer}`;
+        }
+
+        return formattedMsg;
+    }
+
+    /**
+     * Determines if two bind group layouts are compatible
+     * @param {Object} layout1 - First layout
+     * @param {Object} layout2 - Second layout
+     * @returns {boolean} Whether layouts are compatible
+     */
+    static areLayoutsCompatible(layout1, layout2) {
+        if (!layout1.entries || !layout2.entries) return false;
+        if (layout1.entries.length !== layout2.entries.length) return false;
+
+        return layout1.entries.every((entry1, index) => {
+            const entry2 = layout2.entries[index];
+            return entry1.binding === entry2.binding &&
+                   entry1.visibility === entry2.visibility &&
+                   JSON.stringify(entry1.buffer) === JSON.stringify(entry2.buffer) &&
+                   JSON.stringify(entry1.texture) === JSON.stringify(entry2.texture) &&
+                   JSON.stringify(entry1.sampler) === JSON.stringify(entry2.sampler);
+        });
+    }
+
+    /**
+     * Safely destroys a WebGPU resource
+     * @param {Object} resource - Resource to destroy
+     * @param {string} resourceType - Type of resource for logging
+     */
+    static safeDestroy(resource, resourceType = 'resource') {
+        try {
+            if (resource && !resource.destroyed && typeof resource.destroy === 'function') {
+                resource.destroy();
+            }
+        } catch (error) {
+            console.warn(`Error destroying ${resourceType}:`, error);
+        }
+    }
+
+    /**
+     * Creates a debounced function for performance optimization
+     * @param {Function} func - Function to debounce
+     * @param {number} delay - Delay in milliseconds
+     * @returns {Function} Debounced function
+     */
+    static debounce(func, delay) {
+        let timeoutId;
+        return function (...args) {
+            clearTimeout(timeoutId);
+            timeoutId = setTimeout(() => func.apply(this, args), delay);
+        };
+    }
+}
+
 class PipelineCacheManager {
     constructor(app) {
         this.app = app; // Store reference to app
         this.device = app.device;
-        
+
         this.shaderCache = new Map();
         this.pipelineCache = new Map();
         this.layoutCache = new Map();
@@ -64,7 +424,7 @@ class PipelineCacheManager {
      * Simple string hashing function
      * @private
      */
-    _hashString(str) {
+    /*_hashString(str) {
         let hash = 0;
         for (let i = 0; i < str.length; i++) {
             const char = str.charCodeAt(i);
@@ -72,6 +432,9 @@ class PipelineCacheManager {
             hash = hash & hash;
         }
         return hash.toString(36);
+    }*/
+    _hashString(str) {
+        return GPUUtils.hashString(str);
     }
 
     /**
@@ -240,7 +603,7 @@ class PipelineCacheManager {
                     details: this._formatErrorDetails(error),
                     errorCount: 1
                 };
-                
+
                 // Rethrow to allow graceful handling upstream
                 throw new Error(`ShaderCompilationError: ${errorInfo}`);
             }
@@ -278,7 +641,7 @@ class PipelineCacheManager {
      * Formats shader compilation errors with context
      * @private
      */
-    _formatShaderErrors(errors, code, label) {
+    /*_formatShaderErrors(errors, code, label) {
         const lines = code.split('\n');
         const formattedErrors = errors.map(error => this._formatShaderMessage(error, lines));
 
@@ -288,13 +651,16 @@ class PipelineCacheManager {
             errorCount: errors.length,
             label
         };
+    }*/
+    _formatShaderErrors(errors, code, label) {
+        return GPUUtils.formatShaderErrors(errors, code, label);
     }
 
     /**
      * Formats a single shader compilation message with line context
      * @private
      */
-    _formatShaderMessage(message, codeLines = []) {
+    /*_formatShaderMessage(message, codeLines = []) {
         const { lineNum, linePos, offset, length, message: msg, type } = message;
 
         let formattedMsg = `[${type.toUpperCase()}] Line ${lineNum}:${linePos} - ${msg}`;
@@ -307,6 +673,9 @@ class PipelineCacheManager {
         }
 
         return formattedMsg;
+    }*/
+    _formatShaderMessage(message, codeLines = []) {
+        return GPUUtils.formatShaderMessage(message, codeLines);
     }
     //////////////
 
@@ -425,7 +794,7 @@ class PipelineManager {
         return this.pipelineCacheManager._hashString(JSON.stringify(keyComponents));
     }
 
-    createBindGroupLayout(filter, pass) {
+    /*createBindGroupLayout(filter, pass) {
         // Generate a unique key for the layout
         const layoutKey = this._generateLayoutKey(filter, pass);
 
@@ -491,10 +860,35 @@ class PipelineManager {
         layout.entries = entries;
 
         return layout;
+    }*/
+    createBindGroupLayout(filter, pass) {
+        const layoutKey = GPUUtils.generateBindGroupLayoutKey(filter, pass);
+
+        // Try cache first
+        let layout = this.pipelineCacheManager.layoutCache.get(layoutKey)?.layout;
+
+        if (!layout) {
+            const entries = GPUUtils.createStandardLayoutEntries({ filter, pass });
+            layout = this.device.createBindGroupLayout({ entries });
+
+            // Cache the new layout
+            this.pipelineCacheManager.layoutCache.set(layoutKey, {
+                layout,
+                entries,
+                metadata: {
+                    createdAt: Date.now(),
+                    type: filter.type,
+                    lastUsed: Date.now()
+                }
+            });
+        }
+
+        layout.entries = GPUUtils.createStandardLayoutEntries({ filter, pass });
+        return layout;
     }
 
     ////////////////
-    _generateDetailedPipelineKey(config) {
+    /*_generateDetailedPipelineKey(config) {
         const keyComponents = {
             // Basic pipeline configuration
             type: config.type,
@@ -554,9 +948,12 @@ class PipelineManager {
         // Generate a deterministic JSON string
         const sortedKey = JSON.stringify(keyComponents, Object.keys(keyComponents).sort());
         return this.pipelineCacheManager._hashString(sortedKey);
+    }*/
+    _generateDetailedPipelineKey(config) {
+        return GPUUtils.generatePipelineKey(config);
     }
 
-    createBindGroup(layout, filter, pass, bufferResource) {
+    /*createBindGroup(layout, filter, pass, bufferResource) {
 
         if (!layout) {
             throw new Error('No layout provided for bind group creation');
@@ -613,6 +1010,28 @@ class PipelineManager {
         } catch (error) {
             console.error('Error creating bind group:', error);
             throw error;
+        }
+    }*/
+    createBindGroup(layout, filter, pass, bufferResource) {
+        if (!layout) {
+            throw new Error('No layout provided for bind group creation');
+        }
+
+        const entries = GPUUtils.createStandardBindGroupEntries({
+            device: this.device,
+            textureManager: this.textureManager,
+            filter,
+            pass,
+            bufferResource
+        });
+
+        try {
+            return this.device.createBindGroup({ layout, entries });
+        } catch (error) {
+            throw GPUUtils.handleError('PipelineManager', 'createBindGroup', error, {
+                filterLabel: filter.label,
+                passLabel: pass.label
+            });
         }
     }
 
@@ -1397,10 +1816,11 @@ class BindingManager {
 
         this.bindGroupArray[groupIndex] = [{
             binding: 0,
-            resource: this.device.createSampler({
+            /*resource: this.device.createSampler({
                 magFilter: 'linear',
                 minFilter: 'linear'
-            })
+            })*/
+            resource: GPUUtils.createStandardSampler(this.device)
         }];
 
         // Add texture bindings based on max input texture length
@@ -1431,7 +1851,7 @@ class BindingManager {
         });
     }
 
-    createDynamicBindGroupEntries(filter, pass) {
+    /*createDynamicBindGroupEntries(filter, pass) {
         const visibility = filter.type === 'compute' ?
             GPUShaderStage.COMPUTE : GPUShaderStage.FRAGMENT;
 
@@ -1464,9 +1884,12 @@ class BindingManager {
         }
 
         return entries;
+    }*/
+    createDynamicBindGroupEntries(filter, pass) {
+        return GPUUtils.createStandardLayoutEntries({ filter, pass });
     }
 
-    createDynamicBindGroup(layout, filter, pass, bufferResource) {
+    /*createDynamicBindGroup(layout, filter, pass, bufferResource) {
         try {
             const entries = [{
                 binding: 0,
@@ -1511,7 +1934,25 @@ class BindingManager {
                 `Failed to create bind group for filter ${filter.label}`,
                 error
             );
-         throw error;
+            throw error;
+        }
+    }*/
+    createDynamicBindGroup(layout, filter, pass, bufferResource) {
+        try {
+            const entries = GPUUtils.createStandardBindGroupEntries({
+                device: this.device,
+                textureManager: this.textureManager,
+                filter,
+                pass,
+                bufferResource
+            });
+
+            return this.device.createBindGroup({ layout, entries });
+        } catch (error) {
+            throw GPUUtils.handleError('BindingManager', 'createDynamicBindGroup', error, {
+                filterLabel: filter.label,
+                passLabel: pass.label
+            });
         }
     }
 
@@ -1531,7 +1972,7 @@ class BindingManager {
         return this.bindGroupArray;
     }
 
-    _generateLayoutKey(filter, pass) {
+    /*_generateLayoutKey(filter, pass) {
         // Ensure we have access to a hash function even if pipelineManager isn't available
         const hashString = (str) => {
             let hash = 0;
@@ -1554,11 +1995,14 @@ class BindingManager {
         // Use pipelineManager's hash function if available, otherwise use local implementation
         const hashFunction = this.pipelineManager?.pipelineCacheManager?._hashString || hashString;
         return hashFunction(JSON.stringify(keyComponents));
+    }*/
+    _generateLayoutKey(filter, pass) {
+        return GPUUtils.generateBindGroupLayoutKey(filter, pass);
     }
 
     async updateFilterInputTexture(filterKey, passIndex, bindingIndex, textureKey, textureIndex, filters) {
         const filter = filters[filterKey];
-        
+
         if (!filter) {
             throw new Error(
                 'FilterError',
@@ -1567,7 +2011,7 @@ class BindingManager {
         }
 
         const pass = filter.passes[passIndex];
-        
+
         if (!pass) {
             if (passIndex === null) {
                 throw new Error(
@@ -1648,49 +2092,375 @@ class BindingManager {
  * @param {string} filterKey - The key of the filter
  * @param {object} filter - The filter object
  */
-setupFilterBindings(filterKey, filter) {
-    if (!filter || !filter.passes) return;
-    
-    console.log(`Setting up bindings for filter: ${filterKey}`);
-    
-    // Process each pass in the filter
-    for (const pass of filter.passes) {
-      if (!pass.active) continue;
-      
-      // Skip passes that already have bind groups
-      if (pass.bindGroup && pass.bindGroup[0]) continue;
-      
-      console.log(`Creating bind group for pass: ${pass.label}`);
-      
-      // Make sure we have pipeline and entries
-      if (!pass.pipeline) {
-        console.error(`No pipeline available for pass: ${pass.label}`);
-        continue;
-      }
-      
-      if (!pass.bindGroupEntries) {
-        console.warn(`No bind group entries for pass: ${pass.label}, creating empty entries`);
-        pass.bindGroupEntries = [];
-      }
-      
-      // Create bind group from pipeline layout
-      try {
-        pass.bindGroup = [this.app.device.createBindGroup({
-          layout: pass.pipeline.getBindGroupLayout(0),
-          entries: pass.bindGroupEntries
-        })];
-        console.log(`Successfully created bind group for pass: ${pass.label}`);
-      } catch (error) {
-        console.error(`Failed to create bind group for pass: ${pass.label}:`, error);
-      }
+    setupFilterBindings(filterKey, filter) {
+        if (!filter || !filter.passes) return;
+
+        // Process each pass in the filter
+        for (const pass of filter.passes) {
+            if (!pass.active) continue;
+
+            // Skip passes that already have bind groups
+            if (pass.bindGroup && pass.bindGroup[0]) continue;
+
+            // Make sure we have pipeline and entries
+            if (!pass.pipeline) {
+                console.error(`No pipeline available for pass: ${pass.label}`);
+                continue;
+            }
+
+            if (!pass.bindGroupEntries) {
+                console.warn(`No bind group entries for pass: ${pass.label}, creating empty entries`);
+                pass.bindGroupEntries = [];
+            }
+
+            // Create bind group from pipeline layout
+            try {
+                pass.bindGroup = [this.app.device.createBindGroup({
+                    layout: pass.pipeline.getBindGroupLayout(0),
+                    entries: pass.bindGroupEntries
+                })];
+            } catch (error) {
+                console.error(`Failed to create bind group for pass: ${pass.label}:`, error);
+            }
+        }
     }
-  }
-  
+
+}
+
+class RenderQueue {
+    constructor() {
+        this.pendingOperations = new Map();
+        this.isProcessing = false;
+        this.currentOperation = null;
+        this.stats = {
+            completed: 0,
+            failed: 0,
+            queued: 0
+        };
+
+        this.processTimeout = null;
+        this.debounceDelay = 16; // ~60fps
+        this.autoProcess = true; // Allow disabling auto-processing
+
+        this.performanceStats = {
+            averageExecutionTime: 0,
+            totalOperations: 0,
+            maxExecutionTime: 0,
+            minExecutionTime: Infinity
+        };
+    }
+
+    queue(operation, priority = 'normal', metadata = {}, timeout = 30000) {
+        const id = this.generateId();
+
+        const operationWrapper = {
+            id,
+            operation,
+            priority,
+            metadata,
+            timestamp: Date.now(),
+            promise: null,
+            resolve: null,
+            reject: null,
+            settled: false,
+            timeout: timeout
+        };
+
+        // Add timeout handling in the promise
+        const timeoutId = setTimeout(() => {
+            if (!operationWrapper.settled) {
+                operationWrapper.reject(new Error(`Operation ${id} timed out`));
+            }
+        }, timeout);
+
+        operationWrapper.promise = new Promise((resolve, reject) => {
+            operationWrapper.resolve = (value) => {
+                if (!operationWrapper.settled) {
+                    clearTimeout(timeoutId);
+                    operationWrapper.settled = true;
+                    resolve(value);
+                }
+            };
+            operationWrapper.reject = (error) => {
+                if (!operationWrapper.settled) {
+                    operationWrapper.settled = true;
+                    reject(error);
+                }
+            };
+        });
+
+        this.pendingOperations.set(id, operationWrapper);
+        this.stats.queued++;
+
+        if (this.autoProcess) {
+            this.scheduleProcess();
+        }
+
+        return operationWrapper.promise;
+    }
+
+    scheduleProcess() {
+        if (this.processTimeout) {
+            clearTimeout(this.processTimeout);
+        }
+
+        this.processTimeout = setTimeout(() => {
+            this.processTimeout = null;
+            if (!this.isProcessing && this.pendingOperations.size > 0) {
+                this.process().catch(error => {
+                    console.error('Auto-process error:', error);
+                });
+            }
+        }, this.debounceDelay || 16);
+    }
+
+    // Add error recovery method
+    handleProcessError(error) {
+        console.error('Critical render queue error:', error);
+
+        // Count pending operations before clearing
+        const pendingCount = this.pendingOperations.size;
+
+        // Reject all pending operations
+        for (const [id, operation] of this.pendingOperations.entries()) {
+            if (operation.reject) {
+                operation.reject(new Error('Queue processing failed: ' + error.message));
+            }
+        }
+
+        // Clear the queue
+        this.pendingOperations.clear();
+        this.stats.queued = 0;
+        this.stats.failed += pendingCount; // Use saved count, not .size after clearing
+
+        // Reset processing state
+        this.isProcessing = false;
+    }
+
+    async process() {
+        if (this.isProcessing) return;
+        this.isProcessing = true;
+
+        try {
+            let processedCount = 0;
+
+            while (this.pendingOperations.size > 0) {
+                const operations = Array.from(this.pendingOperations.entries())
+                    .sort(([idA, opA], [idB, opB]) => {
+                        const priorityDiff = this.getPriorityValue(opB.priority) - this.getPriorityValue(opA.priority);
+                        return priorityDiff === 0 ? opA.timestamp - opB.timestamp : priorityDiff;
+                    });
+
+                if (operations.length === 0) break;
+
+                const [id, { operation, metadata, resolve, reject }] = operations[0];
+                this.pendingOperations.delete(id);
+                this.stats.queued--;
+                this.currentOperation = { id, metadata };
+
+                try {
+                    const startTime = performance.now();
+                    const result = await operation();
+                    const executionTime = performance.now() - startTime;
+
+                    // Update performance stats
+                    this.updatePerformanceStats(executionTime);
+
+                    this.stats.completed++;
+
+                    if (resolve) resolve(result);
+                } catch (error) {
+                    console.error('Render operation failed:', error);
+                    this.stats.failed++;
+                    if (reject) reject(error);
+                }
+
+                this.currentOperation = null;
+                processedCount++;
+            }
+        } catch (criticalError) {
+            this.handleProcessError(criticalError);
+            throw criticalError;
+        } finally {
+            this.isProcessing = false;
+        }
+    }
+
+    // Reset stats
+    resetStats() {
+        this.stats = {
+            completed: 0,
+            failed: 0,
+            queued: this.pendingOperations.size
+        };
+        this.performanceStats = {
+            averageExecutionTime: 0,
+            totalOperations: 0,
+            maxExecutionTime: 0,
+            minExecutionTime: Infinity
+        };
+    }
+
+    // Add method to get current status
+    getStatus() {
+        return {
+            isProcessing: this.isProcessing,
+            pendingCount: this.pendingOperations.size,
+            currentOperation: this.currentOperation,
+            stats: { ...this.stats }
+        };
+    }
+
+    getPriorityValue(priority) {
+        const priorities = {
+            'urgent': 4,
+            'high': 3,
+            'normal': 2,
+            'low': 1,
+            'background': 0
+        };
+        return priorities[priority] || 2;
+    }
+
+    generateId() {
+        return Date.now().toString(36) + Math.random().toString(36).substr(2);
+    }
+
+    cancel(id) {
+        return this.pendingOperations.delete(id);
+    }
+
+    // Update clear method to be safer
+    clear(force = false) {
+        if (!force && this.isProcessing) {
+            // If processing and not forced, use graceful stop
+            this.stopAfterCurrent();
+            return;
+        }
+
+        // Force clear - reject everything
+        for (const [id, operation] of this.pendingOperations.entries()) {
+            if (operation.reject) {
+                operation.reject(new Error('Queue cleared'));
+            }
+        }
+
+        if (this.processTimeout) {
+            clearTimeout(this.processTimeout);
+            this.processTimeout = null;
+        }
+
+        this.pendingOperations.clear();
+        this.stats.queued = 0;
+        this.currentOperation = null;
+    }
+
+    // Other Methods
+
+    // These help you identify performance bottlenecks
+    // Get performance stats
+    getPerformanceStats() {
+        return { ...this.performanceStats };
+    }
+
+    // Update performance stats after each operation
+    updatePerformanceStats(executionTime) {
+        this.performanceStats.totalOperations++;
+        this.performanceStats.maxExecutionTime = Math.max(this.performanceStats.maxExecutionTime, executionTime);
+        this.performanceStats.minExecutionTime = Math.min(this.performanceStats.minExecutionTime, executionTime);
+
+        // Calculate rolling average
+        const alpha = 0.1; // Weight for new values
+        this.performanceStats.averageExecutionTime =
+            (this.performanceStats.averageExecutionTime * (1 - alpha)) +
+            (executionTime * alpha);
+    }
+
+
+    // Useful for testing different frame rates
+    // Set custom debounce delay
+    setDebounceDelay(delay) {
+        this.debounceDelay = Math.max(0, delay);
+    }
+
+
+    // Helpful for debugging queue behavior
+    async processNow() {
+        if (this.processTimeout) {
+            clearTimeout(this.processTimeout);
+            this.processTimeout = null;
+        }
+        return this.process();
+    }
+
+    // Disable/enable auto-processing
+    setAutoProcess(enabled) {
+        this.autoProcess = enabled;
+        if (!enabled && this.processTimeout) {
+            clearTimeout(this.processTimeout);
+            this.processTimeout = null;
+        }
+    }
+
+
+    // Useful when you need to cancel specific operation types
+    cancelByMetadata(key, value) {
+        let cancelled = 0;
+        for (const [id, op] of this.pendingOperations.entries()) {
+            if (op.metadata[key] === value) {
+                // Check if reject exists before calling
+                if (op.reject && typeof op.reject === 'function') {
+                    op.reject(new Error('Operation cancelled'));
+                }
+                this.pendingOperations.delete(id);
+                cancelled++;
+                this.stats.queued = Math.max(0, this.stats.queued - 1); // Update stats
+            }
+        }
+        return cancelled;
+    }
+
+    
+    // Good for graceful shutdown
+    // Add this new method to gracefully stop after current operation
+    stopAfterCurrent() {
+        const currentId = this.currentOperation?.id;
+
+        for (const [id, operation] of this.pendingOperations.entries()) {
+            if (id !== currentId && operation.reject && typeof operation.reject === 'function' && !operation.settled) {
+                try {
+                    operation.settled = true; // Mark as settled before rejecting
+                    operation.reject(new Error('Queue stopped'));
+                } catch (error) {
+                    console.warn(`Failed to reject operation ${id}:`, error);
+                }
+            }
+        }
+
+        // Remove all except current operation
+        if (currentId && this.pendingOperations.has(currentId)) {
+            const currentOp = this.pendingOperations.get(currentId);
+            this.pendingOperations.clear();
+            this.pendingOperations.set(currentId, currentOp);
+            this.stats.queued = 1;
+        } else {
+            this.pendingOperations.clear();
+            this.stats.queued = 0;
+        }
+
+        if (this.processTimeout) {
+            clearTimeout(this.processTimeout);
+            this.processTimeout = null;
+        }
+    }
 }
 
 class FilterManager {
     constructor(app) {
         this.app = app;
+
+        // Initialize the render queue
+        this.renderQueue = new RenderQueue();
 
         this.animationFrameId = null;
         this.renderCompleteCallbacks = new Map();
@@ -1713,7 +2483,6 @@ class FilterManager {
 
     }
 
-
     /**
     * Execute the filter for the given pass
     * @param {object} pass - The pass object to execute.
@@ -1725,6 +2494,12 @@ class FilterManager {
         // Guard against undefined pass or label
         if (!pass) {
             console.error('Pass is undefined in executeFilterPass');
+            return false;
+        }
+
+        // Add early validation
+        if (!pass?.pipeline) {
+            console.error(`Pass pipeline is missing: ${pass?.label || 'unnamed'}`);
             return false;
         }
 
@@ -1828,6 +2603,12 @@ class FilterManager {
                 return false;
             }
 
+            // Make sure to flush commands after each pass if needed
+            if (type === 'render' && outputTexture === undefined) {
+                await this.app.commandQueue.flush();
+                return true;
+            }
+
             this.app.commandQueue.addRenderPass({
                 label: `Render pass for ${pass.label}`,
                 descriptor: {
@@ -1872,6 +2653,7 @@ class FilterManager {
             return false;
         }
     }
+
     async renderFilterPasses(filter) {
         let breakLoop = false;
 
@@ -1896,41 +2678,34 @@ class FilterManager {
         }
         return breakLoop;
     }
-    async updateFilters(filterUpdateConditions = false) {
-        for (const [key, filter] of Object.entries(this.filters)) {
-            if (!filter?.active) continue;
 
-            if (filterUpdateConditions.filters.includes(filter.label)) {
-
-                if (filter.needsRender) {
-
-                    if (filter.label === filterUpdateConditions.histogram) {
-                        this.histogramNeedsUpdate = true;
-                    }
-
-                    const breakLoop = await this.renderFilterPasses(filter);
-                    filter.needsRender = false;
-
-                    if (breakLoop) return true;
-                }
-            } else {
-                const breakLoop = await this.renderFilterPasses(filter);
-                if (breakLoop) return true;
-            }
-        }
-        return false;
+    // Add a method for high-priority operations
+    async urgentRender(drawToCanvas, transformations, filterUpdateConditions) {
+        return this.renderQueue.queue(async () => {
+            await this.renderFrame(drawToCanvas, transformations, filterUpdateConditions);
+        }, 'high', {
+            type: 'render',
+            operation: 'urgentRender',
+            conditions: filterUpdateConditions,
+            urgent: true
+        });
     }
-    onContextRecovered(device, context) {
-        // Reset any cached state
-        this.pendingUpdates = new Set();
-        this.throttledUpdates = new Map();
 
+    // Add a method for background operations
+    async backgroundUpdate(filterUpdateConditions) {
+        return this.renderQueue.queue(async () => {
+            return this.updateFilters(filterUpdateConditions);
+        }, 'low', {
+            type: 'background',
+            operation: 'filterUpdate',
+            conditions: filterUpdateConditions
+        });
+    }
+
+    onContextRecovered(device, context) {
         // Store references to new device/context
         this.app.device = device;
         this.app.context = context;
-
-        // Schedule any necessary updates
-        this.scheduleUpdate('contextRecovered');
     }
 
     updateFilterInputTexture(filterKey, passIndex, bindingIndex, textureKey, textureIndex) {
@@ -1943,9 +2718,9 @@ class FilterManager {
             this.filters
         );
     }
+
     waitForRenderComplete() {
         let id = this.renderCompleteCounter++;
-        //console.log(`Waiting for render complete: ${id}`);
         return new Promise(resolve => {
             this.renderCompleteCallbacks.set(id, resolve);
             // Set timeout to prevent infinite waiting
@@ -1958,6 +2733,7 @@ class FilterManager {
             }, 30000); // 30 seconds timeout
         });
     }
+
     async clearBuffer(buffer) {
         // Create a temporary buffer to clear the buffer
         const tempBuffer = this.app.device.createBuffer({
@@ -1982,51 +2758,93 @@ class FilterManager {
     }
 
     async updateOutputCanvas(drawToCanvas, transformations, filterUpdateConditions) {
-
-        try {
-            await this.renderFrame(drawToCanvas, transformations, filterUpdateConditions);
-        } catch (error) {
-            console.error('Render error:', error);
-            this.stopRender();
+        // Check if we're already inside a queue operation
+        if (this.renderQueue.isProcessing) {
+            // We're ALREADY inside a queue operation
+            // Adding another queue operation would cause:
+            // 1. Deadlock (queue waiting for itself)
+            // 2. Infinite recursion
+            // 3. Queue blocking itself
+            try {
+                // So we bypass the queue and render directly
+                const renderResult = await this.renderFrame(drawToCanvas, transformations, filterUpdateConditions);
+                return { success: true, complete: renderResult, error: null };
+            } catch (error) {
+                console.error('Direct render error:', error);
+                return { success: false, complete: false, error: error.message };
+            }
         }
 
+        // Not in queue, safe to queue the operation
+        try {
+            const result = await this.renderQueue.queue(async () => {
+                return await this.renderFrame(drawToCanvas, transformations, filterUpdateConditions);
+            }, 'high', {
+                type: 'render',
+                operation: 'updateOutputCanvas',
+                conditions: filterUpdateConditions,
+
+            });
+
+            // Log performance occasionally
+            if (this.debug && Math.random() < 0.01) { // 1% of the time
+                console.log('Queue performance:', this.renderQueue.getPerformanceStats());
+            }
+
+            return { success: true, complete: result, error: null };
+        } catch (error) {
+            console.error('Render error:', error);
+            return { success: false, complete: false, error: error.message };
+        }
     }
 
     async renderFrame(drawToCanvas, transformations, filterUpdateConditions) {
         const currentTime = performance.now();
         const deltaTime = currentTime - this.lastFrameTime;
 
-        // Skip frame if not enough time has elapsed
         if (deltaTime < this.frameInterval) {
-            //console.log("Scheduling next frame due to deltaTime 1");
-            this.scheduleNextFrame(drawToCanvas, transformations, filterUpdateConditions);
-            return;
+            return false;
         }
 
-        // Update filters and check if we should continue rendering
         const breakLoop = await this.updateFilters(filterUpdateConditions);
 
-        // Update histogram if needed
         if (breakLoop && this.histogramNeedsUpdate && !this.app.videoProcessor?.isProcessingVideo) {
             await this.app.updateHistogram();
             this.histogramNeedsUpdate = false;
         }
 
-        // Draw the frame
         this.drawFrame(drawToCanvas, transformations);
-
-        // Update timing
         this.lastFrameTime = currentTime;
 
-        // Handle render completion or schedule next frame
         if (breakLoop) {
             this.completeRender();
-        } else {
-            this.scheduleNextFrame(drawToCanvas, transformations, filterUpdateConditions);
+            return true;
         }
+
+        return false;
+    }
+
+    // Clean up updateFilters
+    async updateFilters(filterUpdateConditions = false) {
+        for (const [key, filter] of Object.entries(this.filters)) {
+            if (!filter?.active) continue;
+
+            if (filter.label === filterUpdateConditions?.histogram) {
+                this.histogramNeedsUpdate = true;
+            }
+
+            const breakLoop = await this.renderFilterPasses(filter);
+
+            if (breakLoop) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     drawFrame(drawToCanvas, transformations) {
+
         const { canvas, ctx } = drawToCanvas;
 
         // Update canvas dimensions
@@ -2041,6 +2859,7 @@ class FilterManager {
         );
 
         ctx.drawImage(this.canvas, 0, 0, canvas.width, canvas.height);
+
     }
 
     scheduleNextFrame(drawToCanvas, transformations, filterUpdateConditions) {
@@ -2055,6 +2874,7 @@ class FilterManager {
 
     completeRender() {
         this.stopRender();
+        // Notify completion
         this.notifyRenderComplete();
     }
 
@@ -2063,11 +2883,13 @@ class FilterManager {
             cancelAnimationFrame(this.animationFrameId);
             this.animationFrameId = null;
         }
-        this.app.isRendering = false;
+        // Clear any pending render operations
+        this.renderQueue.clear();
     }
 
     notifyRenderComplete() {
         for (const [id, callback] of this.renderCompleteCallbacks.entries()) {
+
             callback();
             this.renderCompleteCallbacks.delete(id);
         }
@@ -2692,11 +3514,6 @@ class RecoveryManager {
                     progressEl.style.width = `${progress}%`;
                 }
             }, 2000);
-
-            console.log('Attempting to recover WebGPU context...');
-
-            // Stop any active rendering to prevent further errors
-            this.isRendering = false;
 
             // Clean up resources but don't mark as disposed yet
             await this._cleanupResources();
@@ -3599,8 +4416,6 @@ class WebGpuRenderer {
          // Extract values from all filters
          extractValues(this.filters);
 
-         //console.log('Saved filter values:', savedFilterValues);
-
          // Dispose of current resources
          await this.dispose();
 
@@ -3662,86 +4477,87 @@ class WebGpuRenderer {
 
    // Resize with proper resource cleanup
    async resize(width, height, resetSize = false) {
-         try {
-             if (this.debug) {
-                 console.log('Resizing application from:', this.canvas.width, this.canvas.height, 'to:', width, height, resetSize);
-             }
-     
-             // Wait for GPU to complete pending work
-             await this.waitForGPU();
-     
-             // Check if video processor exists and if current file is video
-             let isVideo = this.imageArray[this.imageIndex].type === 'Video';
-     
-             // Store video state if it's a video
-             let videoState = null;
-             if (isVideo && this.videoProcessor?.videoElement) {
-                 videoState = {
-                     currentTime: this.videoProcessor.videoElement.currentTime,
-                     paused: this.videoProcessor.videoElement.paused
-                 };
-                 // Pause video during resize to prevent frame changes
-                 this.videoProcessor.videoElement.pause();
-             }
-     
-             // Get current dimensions based on source type
-             const currentWidth = isVideo ? this.videoProcessor.videoElement.videoWidth : this.image.width;
-             const currentHeight = isVideo ? this.videoProcessor.videoElement.videoHeight : this.image.height;
-     
-             // Calculate new ratio
-             if (!resetSize) {
-                 this.ratio = 1.0;
-             } else {
-                 let widthRatio = width / currentWidth;
-                 let heightRatio = height / currentHeight;
-                 this.ratio = Math.min(widthRatio, heightRatio);
-             }
-     
-             // Store cache state before resizing
-             if (this.pipelineManager) {
-                 const pipelineCacheState = this.pipelineManager.pipelineCacheManager.storeCacheState();
-     
-                 // Release all active textures back to the pool
-                 const activeTextureKeys = Array.from(this.textureManager.activeTextures.keys());
-                 for (const key of activeTextureKeys) {
-                     this.textureManager.releaseTexture(key);
-                 }
-     
-                 // Recreate resources
-                 await this.createResources(isVideo);
-     
-                 // Restore compatible cached items with new dimensions
-                 await this.pipelineManager.pipelineCacheManager.restoreCacheState(
-                     pipelineCacheState,
-                     {
-                         width: this.canvas.width,
-                         height: this.canvas.height
-                     }
-                 );
-             } else {
-                 // If no pipeline manager exists, just create resources
-                 await this.createResources(isVideo);
-             }
-     
-             // Restore video state if it was a video
-             if (videoState && this.videoProcessor?.videoElement) {
-                 this.videoProcessor.videoElement.currentTime = videoState.currentTime;
-                 if (!videoState.paused) {
-                     await this.videoProcessor.videoElement.play();
-                 }
-             }
-     
-             if (this.debug) {
-                 console.log('Resized canvas to:', this.canvas.width, this.canvas.height, resetSize);
-             }
-     
-             return true;
-         } catch (error) {
-             console.error('Failed to resize application:', error);
-             throw error;
+      try {
+         if (this.debug) {
+            console.log('Resizing application from:', this.canvas.width, this.canvas.height, 'to:', width, height, resetSize);
          }
-     }
-     
+
+         // Wait for GPU to complete pending work
+         await this.waitForGPU();
+
+         // Check if video processor exists and if current file is video
+         let isVideo = this.imageArray[this.imageIndex].type === 'Video';
+
+         // Store video state if it's a video
+         let videoState = null;
+         if (isVideo && this.videoProcessor?.videoElement) {
+            videoState = {
+               currentTime: this.videoProcessor.videoElement.currentTime,
+               paused: this.videoProcessor.videoElement.paused
+            };
+            // Pause video during resize to prevent frame changes
+            this.videoProcessor.videoElement.pause();
+         }
+
+         // Get current dimensions based on source type
+         const currentWidth = isVideo ? this.videoProcessor.videoElement.videoWidth : this.image.width;
+         const currentHeight = isVideo ? this.videoProcessor.videoElement.videoHeight : this.image.height;
+
+         // Calculate new ratio
+         if (!resetSize) {
+            this.ratio = 1.0;
+         } else {
+            let widthRatio = width / currentWidth;
+            let heightRatio = height / currentHeight;
+            this.ratio = Math.min(widthRatio, heightRatio);
+         }
+
+         // Store cache state before resizing
+         if (this.pipelineManager) {
+            const pipelineCacheState = this.pipelineManager.pipelineCacheManager.storeCacheState();
+
+            // Release all active textures back to the pool
+            const activeTextureKeys = Array.from(this.textureManager.activeTextures.keys());
+            for (const key of activeTextureKeys) {
+               this.textureManager.releaseTexture(key);
+            }
+
+            // Recreate resources
+            await this.createResources(isVideo);
+
+            // Restore compatible cached items with new dimensions
+            await this.pipelineManager.pipelineCacheManager.restoreCacheState(
+               pipelineCacheState,
+               {
+                  width: this.canvas.width,
+                  height: this.canvas.height
+               }
+            );
+         } else {
+            // If no pipeline manager exists, just create resources
+            await this.createResources(isVideo);
+         }
+
+         // Restore video state if it was a video
+         if (videoState && this.videoProcessor?.videoElement) {
+            this.videoProcessor.videoElement.currentTime = videoState.currentTime;
+            if (!videoState.paused) {
+               await this.videoProcessor.videoElement.play();
+            }
+         }
+
+         if (this.debug) {
+            console.log('Resized canvas to:', this.canvas.width, this.canvas.height, resetSize);
+         }
+
+         return true;
+      } catch (error) {
+         console.error('Failed to resize application:', error);
+         throw error;
+      }
+   }
+
+
    /**
     * Create the position buffer and write the data to it
     * The coordinates in the position buffer represent
@@ -3753,10 +4569,10 @@ class WebGpuRenderer {
       // Create the bindings for both position and texture coordinates
       this.bindingManager.createBindings(); // No resource needed yet
 
-      // Create tracked buffer
+      // Create tracked buffer with COPY_SRC usage
       this.positionBuffer = this.createTrackedBuffer({
          size: 24,
-         usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+         usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
       });
       // Fullscreen triangle
       this.device.queue.writeBuffer(this.positionBuffer, 0, new Float32Array([
@@ -3792,9 +4608,9 @@ class WebGpuRenderer {
       ]));
    }
 
-      async updateHistogram() {
-         return Histogram.updateHistogram(this);
-     }
+   async updateHistogram() {
+      return Histogram.updateHistogram(this);
+   }
 
    async setupDevice() {
       try {
@@ -3863,7 +4679,6 @@ class WebGpuRenderer {
 
             // Check if pass needs its bind group recreated
             if (!pass.bindGroup || !pass.bindGroup[0] || !pass.pipeline) {
-               //console.log(`Fixing invalid bind group for pass: ${pass.label || 'unnamed'}`);
                needsRebuild = true;
 
                // If pipeline exists but bind group doesn't, try to rebuild just the bind group
@@ -3875,10 +4690,11 @@ class WebGpuRenderer {
                         entries: [
                            {
                               binding: 0,
-                              resource: this.device.createSampler({
+                              /*resource: this.device.createSampler({
                                  magFilter: 'linear',
                                  minFilter: 'linear'
-                              })
+                              })*/
+                             resource: GPUUtils.createStandardSampler(this.device)
                            },
                            // Add a basic texture binding - we'll get a more accurate one when filters run
                            {
@@ -3913,9 +4729,9 @@ class WebGpuRenderer {
          if (this.commandQueue.pendingCommands &&
             this.commandQueue.pendingCommands.length > 0) {
             await this.commandQueue.flush();
-            console.log('Command queue flushed successfully');
+            //console.log('Command queue flushed successfully');
          } else {
-            console.log('No pending commands to flush');
+            //console.log('No pending commands to flush');
          }
       } catch (error) {
          console.error('Error flushing command queue:', error);
@@ -4224,13 +5040,7 @@ class WebGpuRenderer {
    }
 
 
-   // Delegating methods to FilterManager
-   async updateOutputCanvas(drawToCanvas, transformations, filterUpdateConditions) {
-      if (!this.filterManager) {
-         throw new Error('FilterManager not initialized');
-      }
-      return this.filterManager.updateOutputCanvas(drawToCanvas, transformations, filterUpdateConditions);
-   }
+
 
    async updateFilters(filterUpdateConditions = false) {
       if (!this.filterManager) {
@@ -4326,18 +5136,63 @@ class WebGpuRenderer {
    }
 
    updateFilterInputTexture(filterKey, passIndex, bindingIndex, textureKey, textureIndex) {
-      if (!this.filterManager) {
-         throw new Error('FilterManager not initialized');
+      try {
+         if (!this.filterManager) {
+            throw new Error('FilterManager not initialized');
+         }
+         if (!this.filters[filterKey]) {
+            throw new Error(`Filter ${filterKey} not found, skipping update`);
+         }
+         return this.filterManager.updateFilterInputTexture(
+            filterKey, passIndex, bindingIndex, textureKey, textureIndex
+         );
+      } catch (error) {
+         console.warn(`Error updating texture for ${filterKey}:`, error.message);
+         return false;
       }
-      return this.filterManager.updateFilterInputTexture(
-         filterKey, passIndex, bindingIndex, textureKey, textureIndex
-      );
    }
 
    stopRender() {
       if (this.filterManager) {
          this.filterManager.stopRender();
       }
+   }
+
+   // NEW CODE TO IMPROVE RENDERING
+   // Expose prioritized rendering methods for external use
+   async urgentRender(drawToCanvas, transformations, filterUpdateConditions) {
+      return this.filterManager.urgentRender(drawToCanvas, transformations, filterUpdateConditions);
+   }
+
+   async backgroundUpdate(filterUpdateConditions) {
+      return this.filterManager.backgroundUpdate(filterUpdateConditions);
+   }
+
+   async updateOutputCanvas(drawToCanvas, transformations, filterUpdateConditions, priority = 'high') {
+      if (!this.filterManager) {
+         throw new Error('FilterManager not initialized');
+      }
+
+      // Handle different priorities
+      if (priority === 'background') {
+         return this.filterManager.backgroundUpdate(filterUpdateConditions);
+      }
+      if (priority === 'urgent') {
+         return this.filterManager.urgentRender(drawToCanvas, transformations, filterUpdateConditions);
+      }
+
+      // Default to normal update
+      let testValue = await this.filterManager.updateOutputCanvas(drawToCanvas, transformations, filterUpdateConditions);
+      return testValue;
+   }
+
+   // Expose queue management methods
+   getRenderQueueStatus() {
+      return this.filterManager.renderQueue.getStatus();
+   }
+
+   cancelRenderOperations(filterType) {
+      return this.filterManager.renderQueue.cancelByMetadata('filterType', filterType);
    }
 }
 

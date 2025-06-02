@@ -38,7 +38,8 @@ npm install sequentialgpu
 
 ## Usage
 
-The `SequentialGPU` module provides a class `App` that initializes WebGPU processing with the given settings. The settings object should contain the following properties:
+The `SequentialGPU` module provides a `WebGpuRenderer` class that initializes WebGPU processing with the given settings. The settings object should contain the following properties:
+
 
 ```js
 import SequentialGPU from 'sequentialgpu';
@@ -170,7 +171,12 @@ const app = await SequentialGPU.createApp(settings).catch(error => {
    console.error("Error creating app:", error);
 });
 ```
-**Note**: The system automatically creates several required textures (`texture`, `textureMASS`, and `textureTemp`) DO NOT specify or use these names in your settings object.
+**Note**: The system automatically creates several required textures:
+- `texture` - Main input texture for the initial image
+- `textureMASS` - Multi-sample anti-aliasing texture 
+- `textureTemp` - Temporary texture for intermediate processing
+
+DO NOT specify these names in your settings object as they are managed internally.
 
 
 ### Key Methods
@@ -191,12 +197,21 @@ app.updateFilterBuffer('uniformValue', newValue);
 // Update filter input texture
 app.updateFilterInputTexture('filter1', passIndex, bindingIndex, 'newTextureKey', textureIndex);
 
+// Update filters with new conditions
+await app.updateFilters(filterUpdateConditions);
+
 // Execute specific filter passes
 // The app will render the filter pass and return a boolean value 
 // indicating if the pass has an output texture or not.
 // if true you have reached the screen rendering pass
 // allowing you to break a custom loop
 const isScreenRender = await app.renderFilterPasses(filter);
+
+// Wait for render completion
+await app.waitForRenderComplete();
+
+// Clean up resources
+await app.dispose();
 ```
 
 ### Important Notes
@@ -229,19 +244,28 @@ const isScreenRender = await app.renderFilterPasses(filter);
 
 ## API
 
-### `App`
+### `WebGpuRenderer`
 
 #### Constructor
 - `SequentialGPU.createApp(settings)`
   - **settings**: Configuration object for WebGPU processing
+  - **Returns**: Instance of [`WebGpuRenderer`](js/webGpuRenderer.js)
 
 #### Methods
 - `initialize()`: Set up WebGPU device and resources
-- `loadImage(index)`: Load image from settings.images array
+- `loadImage(index)`: Load image from settings.images array  
 - `resize(width, height, resetSize)`: Resize canvas and recreate resources
 - `updateFilterBuffer(key, value)`: Update filter buffer values
 - `updateFilterInputTexture(filterKey, passIndex, bindingIndex, textureKey, textureIndex)`: Update filter input texture
 - `renderFilterPasses(filter)`: Execute all passes for a given filter
+- `updateFilters()`: Update filter conditions and bindings
+- `waitForRenderComplete()`: Wait for all GPU operations to complete
+
+## Performance Features
+
+- **Pipeline Caching** - Shaders and pipelines are cached using [`GPUUtils.generatePipelineKey()`](js/gpuUtils.js) for optimal performance
+- **Resource Tracking** - Automatic cleanup of GPU resources prevents memory leaks
+- **Command Queue Management** - Efficient batching of GPU commands via [`CommandQueueManager`](js/commandQueueManager.js)
 
 ## Contributing
 This project is made available primarily as a resource for others to use and learn from. If you'd like to make modifications:

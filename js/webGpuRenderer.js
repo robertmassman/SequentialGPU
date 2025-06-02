@@ -8,7 +8,7 @@ import CommandQueueManager from "./commandQueueManager.js";
 import SettingsValidator from './settingsValidator.js';
 import RecoveryManager from "./recoveryManager.js";
 import DebugLogger from "./debugLogger.js";
-
+import GPUUtils from './gpuUtils.js';
 
 export class WebGpuRenderer {
    constructor(settings) {
@@ -307,8 +307,6 @@ export class WebGpuRenderer {
          // Extract values from all filters
          extractValues(this.filters);
 
-         //console.log('Saved filter values:', savedFilterValues);
-
          // Dispose of current resources
          await this.dispose();
 
@@ -370,86 +368,87 @@ export class WebGpuRenderer {
 
    // Resize with proper resource cleanup
    async resize(width, height, resetSize = false) {
-         try {
-             if (this.debug) {
-                 console.log('Resizing application from:', this.canvas.width, this.canvas.height, 'to:', width, height, resetSize);
-             }
-     
-             // Wait for GPU to complete pending work
-             await this.waitForGPU();
-     
-             // Check if video processor exists and if current file is video
-             let isVideo = this.imageArray[this.imageIndex].type === 'Video';
-     
-             // Store video state if it's a video
-             let videoState = null;
-             if (isVideo && this.videoProcessor?.videoElement) {
-                 videoState = {
-                     currentTime: this.videoProcessor.videoElement.currentTime,
-                     paused: this.videoProcessor.videoElement.paused
-                 };
-                 // Pause video during resize to prevent frame changes
-                 this.videoProcessor.videoElement.pause();
-             }
-     
-             // Get current dimensions based on source type
-             const currentWidth = isVideo ? this.videoProcessor.videoElement.videoWidth : this.image.width;
-             const currentHeight = isVideo ? this.videoProcessor.videoElement.videoHeight : this.image.height;
-     
-             // Calculate new ratio
-             if (!resetSize) {
-                 this.ratio = 1.0;
-             } else {
-                 let widthRatio = width / currentWidth;
-                 let heightRatio = height / currentHeight;
-                 this.ratio = Math.min(widthRatio, heightRatio);
-             }
-     
-             // Store cache state before resizing
-             if (this.pipelineManager) {
-                 const pipelineCacheState = this.pipelineManager.pipelineCacheManager.storeCacheState();
-     
-                 // Release all active textures back to the pool
-                 const activeTextureKeys = Array.from(this.textureManager.activeTextures.keys());
-                 for (const key of activeTextureKeys) {
-                     this.textureManager.releaseTexture(key);
-                 }
-     
-                 // Recreate resources
-                 await this.createResources(isVideo);
-     
-                 // Restore compatible cached items with new dimensions
-                 await this.pipelineManager.pipelineCacheManager.restoreCacheState(
-                     pipelineCacheState,
-                     {
-                         width: this.canvas.width,
-                         height: this.canvas.height
-                     }
-                 );
-             } else {
-                 // If no pipeline manager exists, just create resources
-                 await this.createResources(isVideo);
-             }
-     
-             // Restore video state if it was a video
-             if (videoState && this.videoProcessor?.videoElement) {
-                 this.videoProcessor.videoElement.currentTime = videoState.currentTime;
-                 if (!videoState.paused) {
-                     await this.videoProcessor.videoElement.play();
-                 }
-             }
-     
-             if (this.debug) {
-                 console.log('Resized canvas to:', this.canvas.width, this.canvas.height, resetSize);
-             }
-     
-             return true;
-         } catch (error) {
-             console.error('Failed to resize application:', error);
-             throw error;
+      try {
+         if (this.debug) {
+            console.log('Resizing application from:', this.canvas.width, this.canvas.height, 'to:', width, height, resetSize);
          }
-     }
-     
+
+         // Wait for GPU to complete pending work
+         await this.waitForGPU();
+
+         // Check if video processor exists and if current file is video
+         let isVideo = this.imageArray[this.imageIndex].type === 'Video';
+
+         // Store video state if it's a video
+         let videoState = null;
+         if (isVideo && this.videoProcessor?.videoElement) {
+            videoState = {
+               currentTime: this.videoProcessor.videoElement.currentTime,
+               paused: this.videoProcessor.videoElement.paused
+            };
+            // Pause video during resize to prevent frame changes
+            this.videoProcessor.videoElement.pause();
+         }
+
+         // Get current dimensions based on source type
+         const currentWidth = isVideo ? this.videoProcessor.videoElement.videoWidth : this.image.width;
+         const currentHeight = isVideo ? this.videoProcessor.videoElement.videoHeight : this.image.height;
+
+         // Calculate new ratio
+         if (!resetSize) {
+            this.ratio = 1.0;
+         } else {
+            let widthRatio = width / currentWidth;
+            let heightRatio = height / currentHeight;
+            this.ratio = Math.min(widthRatio, heightRatio);
+         }
+
+         // Store cache state before resizing
+         if (this.pipelineManager) {
+            const pipelineCacheState = this.pipelineManager.pipelineCacheManager.storeCacheState();
+
+            // Release all active textures back to the pool
+            const activeTextureKeys = Array.from(this.textureManager.activeTextures.keys());
+            for (const key of activeTextureKeys) {
+               this.textureManager.releaseTexture(key);
+            }
+
+            // Recreate resources
+            await this.createResources(isVideo);
+
+            // Restore compatible cached items with new dimensions
+            await this.pipelineManager.pipelineCacheManager.restoreCacheState(
+               pipelineCacheState,
+               {
+                  width: this.canvas.width,
+                  height: this.canvas.height
+               }
+            );
+         } else {
+            // If no pipeline manager exists, just create resources
+            await this.createResources(isVideo);
+         }
+
+         // Restore video state if it was a video
+         if (videoState && this.videoProcessor?.videoElement) {
+            this.videoProcessor.videoElement.currentTime = videoState.currentTime;
+            if (!videoState.paused) {
+               await this.videoProcessor.videoElement.play();
+            }
+         }
+
+         if (this.debug) {
+            console.log('Resized canvas to:', this.canvas.width, this.canvas.height, resetSize);
+         }
+
+         return true;
+      } catch (error) {
+         console.error('Failed to resize application:', error);
+         throw error;
+      }
+   }
+
+
    /**
     * Create the position buffer and write the data to it
     * The coordinates in the position buffer represent
@@ -461,10 +460,10 @@ export class WebGpuRenderer {
       // Create the bindings for both position and texture coordinates
       this.bindingManager.createBindings(); // No resource needed yet
 
-      // Create tracked buffer
+      // Create tracked buffer with COPY_SRC usage
       this.positionBuffer = this.createTrackedBuffer({
          size: 24,
-         usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+         usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
       });
       // Fullscreen triangle
       this.device.queue.writeBuffer(this.positionBuffer, 0, new Float32Array([
@@ -500,9 +499,9 @@ export class WebGpuRenderer {
       ]));
    }
 
-      async updateHistogram() {
-         return Histogram.updateHistogram(this);
-     }
+   async updateHistogram() {
+      return Histogram.updateHistogram(this);
+   }
 
    async setupDevice() {
       try {
@@ -571,7 +570,6 @@ export class WebGpuRenderer {
 
             // Check if pass needs its bind group recreated
             if (!pass.bindGroup || !pass.bindGroup[0] || !pass.pipeline) {
-               //console.log(`Fixing invalid bind group for pass: ${pass.label || 'unnamed'}`);
                needsRebuild = true;
 
                // If pipeline exists but bind group doesn't, try to rebuild just the bind group
@@ -583,10 +581,11 @@ export class WebGpuRenderer {
                         entries: [
                            {
                               binding: 0,
-                              resource: this.device.createSampler({
+                              /*resource: this.device.createSampler({
                                  magFilter: 'linear',
                                  minFilter: 'linear'
-                              })
+                              })*/
+                             resource: GPUUtils.createStandardSampler(this.device)
                            },
                            // Add a basic texture binding - we'll get a more accurate one when filters run
                            {
@@ -621,9 +620,9 @@ export class WebGpuRenderer {
          if (this.commandQueue.pendingCommands &&
             this.commandQueue.pendingCommands.length > 0) {
             await this.commandQueue.flush();
-            console.log('Command queue flushed successfully');
+            //console.log('Command queue flushed successfully');
          } else {
-            console.log('No pending commands to flush');
+            //console.log('No pending commands to flush');
          }
       } catch (error) {
          console.error('Error flushing command queue:', error);
@@ -932,13 +931,7 @@ export class WebGpuRenderer {
    }
 
 
-   // Delegating methods to FilterManager
-   async updateOutputCanvas(drawToCanvas, transformations, filterUpdateConditions) {
-      if (!this.filterManager) {
-         throw new Error('FilterManager not initialized');
-      }
-      return this.filterManager.updateOutputCanvas(drawToCanvas, transformations, filterUpdateConditions);
-   }
+
 
    async updateFilters(filterUpdateConditions = false) {
       if (!this.filterManager) {
@@ -1034,18 +1027,63 @@ export class WebGpuRenderer {
    }
 
    updateFilterInputTexture(filterKey, passIndex, bindingIndex, textureKey, textureIndex) {
-      if (!this.filterManager) {
-         throw new Error('FilterManager not initialized');
+      try {
+         if (!this.filterManager) {
+            throw new Error('FilterManager not initialized');
+         }
+         if (!this.filters[filterKey]) {
+            throw new Error(`Filter ${filterKey} not found, skipping update`);
+         }
+         return this.filterManager.updateFilterInputTexture(
+            filterKey, passIndex, bindingIndex, textureKey, textureIndex
+         );
+      } catch (error) {
+         console.warn(`Error updating texture for ${filterKey}:`, error.message);
+         return false;
       }
-      return this.filterManager.updateFilterInputTexture(
-         filterKey, passIndex, bindingIndex, textureKey, textureIndex
-      );
    }
 
    stopRender() {
       if (this.filterManager) {
          this.filterManager.stopRender();
       }
+   }
+
+   // NEW CODE TO IMPROVE RENDERING
+   // Expose prioritized rendering methods for external use
+   async urgentRender(drawToCanvas, transformations, filterUpdateConditions) {
+      return this.filterManager.urgentRender(drawToCanvas, transformations, filterUpdateConditions);
+   }
+
+   async backgroundUpdate(filterUpdateConditions) {
+      return this.filterManager.backgroundUpdate(filterUpdateConditions);
+   }
+
+   async updateOutputCanvas(drawToCanvas, transformations, filterUpdateConditions, priority = 'high') {
+      if (!this.filterManager) {
+         throw new Error('FilterManager not initialized');
+      }
+
+      // Handle different priorities
+      if (priority === 'background') {
+         return this.filterManager.backgroundUpdate(filterUpdateConditions);
+      }
+      if (priority === 'urgent') {
+         return this.filterManager.urgentRender(drawToCanvas, transformations, filterUpdateConditions);
+      }
+
+      // Default to normal update
+      let testValue = await this.filterManager.updateOutputCanvas(drawToCanvas, transformations, filterUpdateConditions);
+      return testValue;
+   }
+
+   // Expose queue management methods
+   getRenderQueueStatus() {
+      return this.filterManager.renderQueue.getStatus();
+   }
+
+   cancelRenderOperations(filterType) {
+      return this.filterManager.renderQueue.cancelByMetadata('filterType', filterType);
    }
 }
 

@@ -1,6 +1,11 @@
+import RenderQueue from "./renderQueue.js";
+
 export class FilterManager {
     constructor(app) {
         this.app = app;
+
+        // Initialize the render queue
+        this.renderQueue = new RenderQueue();
 
         this.animationFrameId = null;
         this.renderCompleteCallbacks = new Map();
@@ -23,7 +28,6 @@ export class FilterManager {
 
     }
 
-
     /**
     * Execute the filter for the given pass
     * @param {object} pass - The pass object to execute.
@@ -35,6 +39,12 @@ export class FilterManager {
         // Guard against undefined pass or label
         if (!pass) {
             console.error('Pass is undefined in executeFilterPass');
+            return false;
+        }
+
+        // Add early validation
+        if (!pass?.pipeline) {
+            console.error(`Pass pipeline is missing: ${pass?.label || 'unnamed'}`);
             return false;
         }
 
@@ -138,6 +148,12 @@ export class FilterManager {
                 return false;
             }
 
+            // Make sure to flush commands after each pass if needed
+            if (type === 'render' && outputTexture === undefined) {
+                await this.app.commandQueue.flush();
+                return true;
+            }
+
             this.app.commandQueue.addRenderPass({
                 label: `Render pass for ${pass.label}`,
                 descriptor: {
@@ -182,6 +198,7 @@ export class FilterManager {
             return false;
         }
     }
+
     async renderFilterPasses(filter) {
         let breakLoop = false;
 
@@ -206,41 +223,34 @@ export class FilterManager {
         }
         return breakLoop;
     }
-    async updateFilters(filterUpdateConditions = false) {
-        for (const [key, filter] of Object.entries(this.filters)) {
-            if (!filter?.active) continue;
 
-            if (filterUpdateConditions.filters.includes(filter.label)) {
-
-                if (filter.needsRender) {
-
-                    if (filter.label === filterUpdateConditions.histogram) {
-                        this.histogramNeedsUpdate = true;
-                    }
-
-                    const breakLoop = await this.renderFilterPasses(filter);
-                    filter.needsRender = false;
-
-                    if (breakLoop) return true;
-                }
-            } else {
-                const breakLoop = await this.renderFilterPasses(filter);
-                if (breakLoop) return true;
-            }
-        }
-        return false;
+    // Add a method for high-priority operations
+    async urgentRender(drawToCanvas, transformations, filterUpdateConditions) {
+        return this.renderQueue.queue(async () => {
+            await this.renderFrame(drawToCanvas, transformations, filterUpdateConditions);
+        }, 'high', {
+            type: 'render',
+            operation: 'urgentRender',
+            conditions: filterUpdateConditions,
+            urgent: true
+        });
     }
-    onContextRecovered(device, context) {
-        // Reset any cached state
-        this.pendingUpdates = new Set();
-        this.throttledUpdates = new Map();
 
+    // Add a method for background operations
+    async backgroundUpdate(filterUpdateConditions) {
+        return this.renderQueue.queue(async () => {
+            return this.updateFilters(filterUpdateConditions);
+        }, 'low', {
+            type: 'background',
+            operation: 'filterUpdate',
+            conditions: filterUpdateConditions
+        });
+    }
+
+    onContextRecovered(device, context) {
         // Store references to new device/context
         this.app.device = device;
         this.app.context = context;
-
-        // Schedule any necessary updates
-        this.scheduleUpdate('contextRecovered');
     }
 
     updateFilterInputTexture(filterKey, passIndex, bindingIndex, textureKey, textureIndex) {
@@ -253,9 +263,9 @@ export class FilterManager {
             this.filters
         );
     }
+
     waitForRenderComplete() {
         let id = this.renderCompleteCounter++;
-        //console.log(`Waiting for render complete: ${id}`);
         return new Promise(resolve => {
             this.renderCompleteCallbacks.set(id, resolve);
             // Set timeout to prevent infinite waiting
@@ -268,6 +278,7 @@ export class FilterManager {
             }, 30000); // 30 seconds timeout
         });
     }
+
     async clearBuffer(buffer) {
         // Create a temporary buffer to clear the buffer
         const tempBuffer = this.app.device.createBuffer({
@@ -292,51 +303,93 @@ export class FilterManager {
     }
 
     async updateOutputCanvas(drawToCanvas, transformations, filterUpdateConditions) {
-
-        try {
-            await this.renderFrame(drawToCanvas, transformations, filterUpdateConditions);
-        } catch (error) {
-            console.error('Render error:', error);
-            this.stopRender();
+        // Check if we're already inside a queue operation
+        if (this.renderQueue.isProcessing) {
+            // We're ALREADY inside a queue operation
+            // Adding another queue operation would cause:
+            // 1. Deadlock (queue waiting for itself)
+            // 2. Infinite recursion
+            // 3. Queue blocking itself
+            try {
+                // So we bypass the queue and render directly
+                const renderResult = await this.renderFrame(drawToCanvas, transformations, filterUpdateConditions);
+                return { success: true, complete: renderResult, error: null };
+            } catch (error) {
+                console.error('Direct render error:', error);
+                return { success: false, complete: false, error: error.message };
+            }
         }
 
+        // Not in queue, safe to queue the operation
+        try {
+            const result = await this.renderQueue.queue(async () => {
+                return await this.renderFrame(drawToCanvas, transformations, filterUpdateConditions);
+            }, 'high', {
+                type: 'render',
+                operation: 'updateOutputCanvas',
+                conditions: filterUpdateConditions,
+
+            });
+
+            // Log performance occasionally
+            if (this.debug && Math.random() < 0.01) { // 1% of the time
+                console.log('Queue performance:', this.renderQueue.getPerformanceStats());
+            }
+
+            return { success: true, complete: result, error: null };
+        } catch (error) {
+            console.error('Render error:', error);
+            return { success: false, complete: false, error: error.message };
+        }
     }
 
     async renderFrame(drawToCanvas, transformations, filterUpdateConditions) {
         const currentTime = performance.now();
         const deltaTime = currentTime - this.lastFrameTime;
 
-        // Skip frame if not enough time has elapsed
         if (deltaTime < this.frameInterval) {
-            //console.log("Scheduling next frame due to deltaTime 1");
-            this.scheduleNextFrame(drawToCanvas, transformations, filterUpdateConditions);
-            return;
+            return false;
         }
 
-        // Update filters and check if we should continue rendering
         const breakLoop = await this.updateFilters(filterUpdateConditions);
 
-        // Update histogram if needed
         if (breakLoop && this.histogramNeedsUpdate && !this.app.videoProcessor?.isProcessingVideo) {
             await this.app.updateHistogram();
             this.histogramNeedsUpdate = false;
         }
 
-        // Draw the frame
         this.drawFrame(drawToCanvas, transformations);
-
-        // Update timing
         this.lastFrameTime = currentTime;
 
-        // Handle render completion or schedule next frame
         if (breakLoop) {
             this.completeRender();
-        } else {
-            this.scheduleNextFrame(drawToCanvas, transformations, filterUpdateConditions);
+            return true;
         }
+
+        return false;
+    }
+
+    // Clean up updateFilters
+    async updateFilters(filterUpdateConditions = false) {
+        for (const [key, filter] of Object.entries(this.filters)) {
+            if (!filter?.active) continue;
+
+            if (filter.label === filterUpdateConditions?.histogram) {
+                this.histogramNeedsUpdate = true;
+            }
+
+            const breakLoop = await this.renderFilterPasses(filter);
+
+            if (breakLoop) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     drawFrame(drawToCanvas, transformations) {
+
         const { canvas, ctx } = drawToCanvas;
 
         // Update canvas dimensions
@@ -351,6 +404,7 @@ export class FilterManager {
         );
 
         ctx.drawImage(this.canvas, 0, 0, canvas.width, canvas.height);
+
     }
 
     scheduleNextFrame(drawToCanvas, transformations, filterUpdateConditions) {
@@ -365,6 +419,7 @@ export class FilterManager {
 
     completeRender() {
         this.stopRender();
+        // Notify completion
         this.notifyRenderComplete();
     }
 
@@ -373,11 +428,13 @@ export class FilterManager {
             cancelAnimationFrame(this.animationFrameId);
             this.animationFrameId = null;
         }
-        this.app.isRendering = false;
+        // Clear any pending render operations
+        this.renderQueue.clear();
     }
 
     notifyRenderComplete() {
         for (const [id, callback] of this.renderCompleteCallbacks.entries()) {
+
             callback();
             this.renderCompleteCallbacks.delete(id);
         }

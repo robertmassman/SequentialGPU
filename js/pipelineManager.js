@@ -1,4 +1,5 @@
 import PipelineCacheManager from "./pipelineCacheManager.js";
+import GPUUtils from './gpuUtils.js';
 
 class PipelineManager {
     constructor(app) {
@@ -71,7 +72,7 @@ class PipelineManager {
         return this.pipelineCacheManager._hashString(JSON.stringify(keyComponents));
     }
 
-    createBindGroupLayout(filter, pass) {
+    /*createBindGroupLayout(filter, pass) {
         // Generate a unique key for the layout
         const layoutKey = this._generateLayoutKey(filter, pass);
 
@@ -137,10 +138,35 @@ class PipelineManager {
         layout.entries = entries;
 
         return layout;
+    }*/
+    createBindGroupLayout(filter, pass) {
+        const layoutKey = GPUUtils.generateBindGroupLayoutKey(filter, pass);
+
+        // Try cache first
+        let layout = this.pipelineCacheManager.layoutCache.get(layoutKey)?.layout;
+
+        if (!layout) {
+            const entries = GPUUtils.createStandardLayoutEntries({ filter, pass });
+            layout = this.device.createBindGroupLayout({ entries });
+
+            // Cache the new layout
+            this.pipelineCacheManager.layoutCache.set(layoutKey, {
+                layout,
+                entries,
+                metadata: {
+                    createdAt: Date.now(),
+                    type: filter.type,
+                    lastUsed: Date.now()
+                }
+            });
+        }
+
+        layout.entries = GPUUtils.createStandardLayoutEntries({ filter, pass });
+        return layout;
     }
 
     ////////////////
-    _generateDetailedPipelineKey(config) {
+    /*_generateDetailedPipelineKey(config) {
         const keyComponents = {
             // Basic pipeline configuration
             type: config.type,
@@ -200,9 +226,12 @@ class PipelineManager {
         // Generate a deterministic JSON string
         const sortedKey = JSON.stringify(keyComponents, Object.keys(keyComponents).sort());
         return this.pipelineCacheManager._hashString(sortedKey);
+    }*/
+    _generateDetailedPipelineKey(config) {
+        return GPUUtils.generatePipelineKey(config);
     }
 
-    createBindGroup(layout, filter, pass, bufferResource) {
+    /*createBindGroup(layout, filter, pass, bufferResource) {
 
         if (!layout) {
             throw new Error('No layout provided for bind group creation');
@@ -259,6 +288,28 @@ class PipelineManager {
         } catch (error) {
             console.error('Error creating bind group:', error);
             throw error;
+        }
+    }*/
+    createBindGroup(layout, filter, pass, bufferResource) {
+        if (!layout) {
+            throw new Error('No layout provided for bind group creation');
+        }
+
+        const entries = GPUUtils.createStandardBindGroupEntries({
+            device: this.device,
+            textureManager: this.textureManager,
+            filter,
+            pass,
+            bufferResource
+        });
+
+        try {
+            return this.device.createBindGroup({ layout, entries });
+        } catch (error) {
+            throw GPUUtils.handleError('PipelineManager', 'createBindGroup', error, {
+                filterLabel: filter.label,
+                passLabel: pass.label
+            });
         }
     }
 

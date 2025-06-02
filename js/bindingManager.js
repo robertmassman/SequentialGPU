@@ -1,3 +1,5 @@
+import GPUUtils from './gpuUtils.js';
+
 class BindingManager {
     constructor(app) {
         this.device = app.device;
@@ -24,10 +26,11 @@ class BindingManager {
 
         this.bindGroupArray[groupIndex] = [{
             binding: 0,
-            resource: this.device.createSampler({
+            /*resource: this.device.createSampler({
                 magFilter: 'linear',
                 minFilter: 'linear'
-            })
+            })*/
+            resource: GPUUtils.createStandardSampler(this.device)
         }];
 
         // Add texture bindings based on max input texture length
@@ -58,7 +61,7 @@ class BindingManager {
         });
     }
 
-    createDynamicBindGroupEntries(filter, pass) {
+    /*createDynamicBindGroupEntries(filter, pass) {
         const visibility = filter.type === 'compute' ?
             GPUShaderStage.COMPUTE : GPUShaderStage.FRAGMENT;
 
@@ -91,9 +94,12 @@ class BindingManager {
         }
 
         return entries;
+    }*/
+    createDynamicBindGroupEntries(filter, pass) {
+        return GPUUtils.createStandardLayoutEntries({ filter, pass });
     }
 
-    createDynamicBindGroup(layout, filter, pass, bufferResource) {
+    /*createDynamicBindGroup(layout, filter, pass, bufferResource) {
         try {
             const entries = [{
                 binding: 0,
@@ -138,7 +144,25 @@ class BindingManager {
                 `Failed to create bind group for filter ${filter.label}`,
                 error
             );
-         throw error;
+            throw error;
+        }
+    }*/
+    createDynamicBindGroup(layout, filter, pass, bufferResource) {
+        try {
+            const entries = GPUUtils.createStandardBindGroupEntries({
+                device: this.device,
+                textureManager: this.textureManager,
+                filter,
+                pass,
+                bufferResource
+            });
+
+            return this.device.createBindGroup({ layout, entries });
+        } catch (error) {
+            throw GPUUtils.handleError('BindingManager', 'createDynamicBindGroup', error, {
+                filterLabel: filter.label,
+                passLabel: pass.label
+            });
         }
     }
 
@@ -158,7 +182,7 @@ class BindingManager {
         return this.bindGroupArray;
     }
 
-    _generateLayoutKey(filter, pass) {
+    /*_generateLayoutKey(filter, pass) {
         // Ensure we have access to a hash function even if pipelineManager isn't available
         const hashString = (str) => {
             let hash = 0;
@@ -181,11 +205,14 @@ class BindingManager {
         // Use pipelineManager's hash function if available, otherwise use local implementation
         const hashFunction = this.pipelineManager?.pipelineCacheManager?._hashString || hashString;
         return hashFunction(JSON.stringify(keyComponents));
+    }*/
+    _generateLayoutKey(filter, pass) {
+        return GPUUtils.generateBindGroupLayoutKey(filter, pass);
     }
 
     async updateFilterInputTexture(filterKey, passIndex, bindingIndex, textureKey, textureIndex, filters) {
         const filter = filters[filterKey];
-        
+
         if (!filter) {
             throw new Error(
                 'FilterError',
@@ -194,7 +221,7 @@ class BindingManager {
         }
 
         const pass = filter.passes[passIndex];
-        
+
         if (!pass) {
             if (passIndex === null) {
                 throw new Error(
@@ -275,44 +302,39 @@ class BindingManager {
  * @param {string} filterKey - The key of the filter
  * @param {object} filter - The filter object
  */
-setupFilterBindings(filterKey, filter) {
-    if (!filter || !filter.passes) return;
-    
-    console.log(`Setting up bindings for filter: ${filterKey}`);
-    
-    // Process each pass in the filter
-    for (const pass of filter.passes) {
-      if (!pass.active) continue;
-      
-      // Skip passes that already have bind groups
-      if (pass.bindGroup && pass.bindGroup[0]) continue;
-      
-      console.log(`Creating bind group for pass: ${pass.label}`);
-      
-      // Make sure we have pipeline and entries
-      if (!pass.pipeline) {
-        console.error(`No pipeline available for pass: ${pass.label}`);
-        continue;
-      }
-      
-      if (!pass.bindGroupEntries) {
-        console.warn(`No bind group entries for pass: ${pass.label}, creating empty entries`);
-        pass.bindGroupEntries = [];
-      }
-      
-      // Create bind group from pipeline layout
-      try {
-        pass.bindGroup = [this.app.device.createBindGroup({
-          layout: pass.pipeline.getBindGroupLayout(0),
-          entries: pass.bindGroupEntries
-        })];
-        console.log(`Successfully created bind group for pass: ${pass.label}`);
-      } catch (error) {
-        console.error(`Failed to create bind group for pass: ${pass.label}:`, error);
-      }
+    setupFilterBindings(filterKey, filter) {
+        if (!filter || !filter.passes) return;
+
+        // Process each pass in the filter
+        for (const pass of filter.passes) {
+            if (!pass.active) continue;
+
+            // Skip passes that already have bind groups
+            if (pass.bindGroup && pass.bindGroup[0]) continue;
+
+            // Make sure we have pipeline and entries
+            if (!pass.pipeline) {
+                console.error(`No pipeline available for pass: ${pass.label}`);
+                continue;
+            }
+
+            if (!pass.bindGroupEntries) {
+                console.warn(`No bind group entries for pass: ${pass.label}, creating empty entries`);
+                pass.bindGroupEntries = [];
+            }
+
+            // Create bind group from pipeline layout
+            try {
+                pass.bindGroup = [this.app.device.createBindGroup({
+                    layout: pass.pipeline.getBindGroupLayout(0),
+                    entries: pass.bindGroupEntries
+                })];
+            } catch (error) {
+                console.error(`Failed to create bind group for pass: ${pass.label}:`, error);
+            }
+        }
     }
-  }
-  
+
 }
 
 export default BindingManager;

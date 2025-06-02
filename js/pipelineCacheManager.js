@@ -1,8 +1,10 @@
+import GPUUtils from './gpuUtils.js';
+
 class PipelineCacheManager {
     constructor(app) {
         this.app = app; // Store reference to app
         this.device = app.device;
-        
+
         this.shaderCache = new Map();
         this.pipelineCache = new Map();
         this.layoutCache = new Map();
@@ -64,7 +66,7 @@ class PipelineCacheManager {
      * Simple string hashing function
      * @private
      */
-    _hashString(str) {
+    /*_hashString(str) {
         let hash = 0;
         for (let i = 0; i < str.length; i++) {
             const char = str.charCodeAt(i);
@@ -72,6 +74,9 @@ class PipelineCacheManager {
             hash = hash & hash;
         }
         return hash.toString(36);
+    }*/
+    _hashString(str) {
+        return GPUUtils.hashString(str);
     }
 
     /**
@@ -240,7 +245,7 @@ class PipelineCacheManager {
                     details: this._formatErrorDetails(error),
                     errorCount: 1
                 };
-                
+
                 // Rethrow to allow graceful handling upstream
                 throw new Error(`ShaderCompilationError: ${errorInfo}`);
             }
@@ -278,7 +283,7 @@ class PipelineCacheManager {
      * Formats shader compilation errors with context
      * @private
      */
-    _formatShaderErrors(errors, code, label) {
+    /*_formatShaderErrors(errors, code, label) {
         const lines = code.split('\n');
         const formattedErrors = errors.map(error => this._formatShaderMessage(error, lines));
 
@@ -288,13 +293,16 @@ class PipelineCacheManager {
             errorCount: errors.length,
             label
         };
+    }*/
+    _formatShaderErrors(errors, code, label) {
+        return GPUUtils.formatShaderErrors(errors, code, label);
     }
 
     /**
      * Formats a single shader compilation message with line context
      * @private
      */
-    _formatShaderMessage(message, codeLines = []) {
+    /*_formatShaderMessage(message, codeLines = []) {
         const { lineNum, linePos, offset, length, message: msg, type } = message;
 
         let formattedMsg = `[${type.toUpperCase()}] Line ${lineNum}:${linePos} - ${msg}`;
@@ -307,6 +315,9 @@ class PipelineCacheManager {
         }
 
         return formattedMsg;
+    }*/
+    _formatShaderMessage(message, codeLines = []) {
+        return GPUUtils.formatShaderMessage(message, codeLines);
     }
     //////////////
 
