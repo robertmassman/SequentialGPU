@@ -585,7 +585,7 @@ export class WebGpuRenderer {
                                  magFilter: 'linear',
                                  minFilter: 'linear'
                               })*/
-                             resource: GPUUtils.createStandardSampler(this.device)
+                              resource: GPUUtils.createStandardSampler(this.device)
                            },
                            // Add a basic texture binding - we'll get a more accurate one when filters run
                            {
@@ -1084,6 +1084,19 @@ export class WebGpuRenderer {
 
    cancelRenderOperations(filterType) {
       return this.filterManager.renderQueue.cancelByMetadata('filterType', filterType);
+   }
+
+   // Add these methods if you want easier access to queue operations
+   queueOperation(operation, priority = 'normal', metadata = {}) {
+      return this.filterManager.renderQueue.queue(operation, priority, metadata);
+   }
+
+   clearRenderQueue() {
+      return this.filterManager.renderQueue.clear();
+   }
+
+   getQueuePerformanceStats() {
+      return this.filterManager.renderQueue.getPerformanceStats();
    }
 }
 

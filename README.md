@@ -207,12 +207,65 @@ await app.updateFilters(filterUpdateConditions);
 // allowing you to break a custom loop
 const isScreenRender = await app.renderFilterPasses(filter);
 
+// Queue custom operations with priority control
+// Operations are executed in order of priority then timestamp
+// Operation: Function that returns a Promise
+// Priority: String 'urgent', 'high', 'normal', 'low', 'background',
+// Metadata: Object can be used to tag operations for easier management
+await app.queueOperation(async () => {
+    // Your custom GPU operation here
+    return await someAsyncOperation();
+}, 'high', { 
+    type: 'custom', 
+    operation: 'myOperation',
+    description: 'Custom processing task'
+});
+
 // Wait for render completion
 await app.waitForRenderComplete();
 
 // Clean up resources
 await app.dispose();
 ```
+
+
+### Render Queue System
+
+SequentialGPU includes a built-in render queue for managing GPU operations efficiently:
+
+```js
+// Queue operations with different priorities
+await app.queueOperation(operation, priority, metadata);
+
+// Get queue status and performance metrics
+const status = app.getRenderQueueStatus();
+const stats = app.getQueuePerformanceStats();
+
+// Cancel operations by metadata
+app.cancelRenderOperations('filterType');
+
+// Clear the entire queue
+app.clearRenderQueue();
+```
+
+**Priority Levels:**
+- `'urgent'` - Highest priority, executed immediately
+- `'high'` - High priority operations (default for render operations)
+- `'normal'` - Standard priority (default)
+- `'low'` - Lower priority operations
+- `'background'` - Lowest priority, executed when queue is idle
+
+**Metadata Object:**
+The metadata parameter allows you to tag operations for easier management:
+```js
+{
+    type: 'render',           // Operation category
+    operation: 'filterUpdate', // Specific operation name
+    filterType: 'blur',       // Custom properties for filtering
+    urgent: true              // Custom flags
+}
+```
+
 
 ### Important Notes
 
