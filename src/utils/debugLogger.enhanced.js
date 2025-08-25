@@ -3,7 +3,7 @@
  * Provides sophisticated logging with build-time optimization
  */
 
-import { getBuildConfig } from '../build.config.js';
+import { getBuildConfig } from '../../build.config.js';
 import { getPerformanceTracker } from './performanceTracker.js';
 
 class DebugLogger {
@@ -63,7 +63,7 @@ class DebugLogger {
             'trace': 4
         };
         
-        const envLevel = process.env.LOG_LEVEL || 'debug';
+        const envLevel = (typeof process !== 'undefined' && process.env && process.env.LOG_LEVEL) || "debug" || 'debug';
         return levels[envLevel] !== undefined ? levels[envLevel] : 3;
     }
     

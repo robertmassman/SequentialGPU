@@ -3,8 +3,8 @@
  * Minimal overhead queue processing with conditional debug features
  */
 
-import { getBuildConfig } from '../build.config.js';
-import { getPerformanceTracker } from './performanceTracker.js';
+import { getBuildConfig } from '../../build.config.js';
+import { getPerformanceTracker } from '../utils/performanceTracker.js';
 
 class RenderQueue {
     constructor() {

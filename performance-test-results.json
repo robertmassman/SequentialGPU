@@ -1,123 +1,123 @@
 {
-  "timestamp": "2025-08-24T21:12:42.162Z",
+  "timestamp": "2025-08-25T00:27:32.402Z",
   "system": {
     "nodeVersion": "v22.15.0",
     "platform": "darwin",
     "arch": "arm64",
-    "memory": 8,
+    "memory": 5,
     "cpuCount": 16
   },
   "tests": {
     "queuePerformance": {
       "synchronousOperations": {
-        "averageTime": 1.177019301599997,
-        "minTime": 0.020916999999826658,
-        "maxTime": 4.011540999999852,
-        "standardDeviation": 0.23947869101988495,
-        "operationsPerSecond": 850
+        "averageTime": 1.1604729943000025,
+        "minTime": 0.01320799999848532,
+        "maxTime": 4.972917000000052,
+        "standardDeviation": 0.2279408999587189,
+        "operationsPerSecond": 862
       },
       "asynchronousOperations": {
-        "totalTime": 68.32924999999886,
-        "averageTime": 0.0068329249999998865,
-        "operationsPerSecond": 146350
+        "totalTime": 14.552458000000115,
+        "averageTime": 0.0014552458000000115,
+        "operationsPerSecond": 687169
       },
       "priorityHandling": {
         "normal": {
-          "averageTime": 1.1663478759999943,
-          "minTime": 0.022041000000172062,
-          "maxTime": 1.4836249999989377,
-          "standardDeviation": 0.1828671743449464,
-          "operationsPerSecond": 857
+          "averageTime": 1.1524812570000122,
+          "minTime": 0.013708000000406173,
+          "maxTime": 1.4441249999999854,
+          "standardDeviation": 0.2417509728301118,
+          "operationsPerSecond": 868
         },
         "high": {
-          "averageTime": 1.176900135000009,
-          "minTime": 0.04100000000107684,
-          "maxTime": 3.6491659999992407,
-          "standardDeviation": 0.2629969707576861,
-          "operationsPerSecond": 850
+          "averageTime": 1.1577577599999422,
+          "minTime": 0.03633300000001327,
+          "maxTime": 1.4362080000009882,
+          "standardDeviation": 0.23759251092810235,
+          "operationsPerSecond": 864
         },
         "urgent": {
-          "averageTime": 1.1787220319999834,
-          "minTime": 0.022708000000420725,
-          "maxTime": 2.399375000000873,
-          "standardDeviation": 0.22232203396560293,
-          "operationsPerSecond": 848
+          "averageTime": 1.167607871000011,
+          "minTime": 0.021708000000216998,
+          "maxTime": 1.7118329999993875,
+          "standardDeviation": 0.21007008503939864,
+          "operationsPerSecond": 856
         }
       },
       "bulkOperations": {
-        "totalTime": 30.02325000000019,
-        "throughput": 166538,
-        "averageTime": 0.0060046500000000376
+        "totalTime": 6.465500000000247,
+        "throughput": 773335,
+        "averageTime": 0.0012931000000000494
       },
       "meetsTarget": true,
-      "targetDifference": -3.822980698400003
+      "targetDifference": -3.8395270056999973
     },
     "memoryUsage": {
       "initial": {
-        "heapUsed": 18.54,
-        "heapTotal": 32.08,
-        "external": 2.28
+        "heapUsed": 7.65,
+        "heapTotal": 24.33,
+        "external": 1.72
       },
       "peak": {
-        "heapUsed": 19.68,
-        "heapTotal": 32.08,
-        "external": 2.28
+        "heapUsed": 8.78,
+        "heapTotal": 24.33,
+        "external": 1.72
       },
       "final": {
-        "heapUsed": 19.68,
-        "heapTotal": 32.08,
-        "external": 2.28
+        "heapUsed": 8.78,
+        "heapTotal": 24.33,
+        "external": 1.72
       },
-      "allocated": 1190960,
+      "allocated": 1183664,
       "released": -264,
-      "efficiency": -0.02216699133472157
+      "efficiency": -0.022303626704875706
     },
     "fastPathEfficiency": {
       "fastPath": {
-        "averageTime": 0.001570926499991856,
-        "minTime": 0.001082999999198364,
-        "maxTime": 0.6983749999999418,
-        "standardDeviation": 0.009548590782496777,
-        "operationsPerSecond": 636567
+        "averageTime": 0.00026611187499088376,
+        "minTime": 0,
+        "maxTime": 0.171875,
+        "standardDeviation": 0.0021030498258134632,
+        "operationsPerSecond": 3757818
       },
       "regularPath": {
-        "averageTime": 1.1786035405000248,
-        "minTime": 0.023167000003013527,
-        "maxTime": 2.0903330000001006,
-        "standardDeviation": 0.20897512850607955,
-        "operationsPerSecond": 848
+        "averageTime": 1.1649514655000321,
+        "minTime": 0.013291999999637483,
+        "maxTime": 2.5958749999990687,
+        "standardDeviation": 0.1882124809289061,
+        "operationsPerSecond": 858
       },
-      "speedupRatio": 750.2601429832235,
+      "speedupRatio": 4377.675613085436,
       "efficiency": 80
     },
     "objectPooling": {
-      "withPooling": 0.25495799999771407,
-      "withoutPooling": 0.1428330000017013,
-      "improvement": -78.50076662583383,
+      "withPooling": 0.907374999998865,
+      "withoutPooling": 0.3410829999993439,
+      "improvement": -166.02762377503728,
       "poolSize": 10
     },
     "cachePerformance": {
-      "totalTime": 0.9138750000020082,
-      "operationsPerSecond": 10942416,
+      "totalTime": 0.8107090000012249,
+      "operationsPerSecond": 12334882,
       "hitRate": 99.5,
       "missRate": 0.5,
-      "averageOperationTime": 0.00009138750000020081
+      "averageOperationTime": 0.00008107090000012249
     }
   },
   "summary": {
     "overallScore": 80,
     "queuePerformance": {
       "meetsTarget": true,
-      "avgTime": 1.177019301599997,
-      "throughput": 166538
+      "avgTime": 1.1604729943000025,
+      "throughput": 773335
     },
     "memoryEfficiency": {
-      "score": -0.02216699133472157,
+      "score": -0.022303626704875706,
       "leakRisk": "high"
     },
     "optimizationEffectiveness": {
       "fastPathUsage": 80,
-      "poolingImprovement": -78.50076662583383,
+      "poolingImprovement": -166.02762377503728,
       "cacheHitRate": 99.5
     }
   },

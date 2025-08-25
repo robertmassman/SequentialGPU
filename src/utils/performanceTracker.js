@@ -3,7 +3,7 @@
  * Comprehensive performance monitoring for debug builds
  */
 
-import { getBuildConfig } from '../build.config.js';
+import { getBuildConfig } from '../../build.config.js';
 
 class PerformanceTracker {
     constructor() {

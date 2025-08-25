@@ -4,9 +4,9 @@
  * Conditional loading based on build target for optimal performance
  */
 
-import { getBuildConfig } from '../build.config.js';
-import { WebGpuRenderer } from './webGpuRenderer.js';
-import { RenderQueue } from './renderQueue.optimized.js';
+import { getBuildConfig } from '../../build.config.js';
+import { WebGpuRenderer } from '../core/webGpuRenderer.js';
+import { RenderQueue } from '../queue/renderQueue.optimized.js';
 
 // Build configuration
 const config = getBuildConfig();
@@ -59,8 +59,19 @@ export const SequentialGPU = {
      * @returns {Promise<WebGpuRenderer>} Initialized renderer instance
      */
     async createApp(settings) {
-        // Load debug modules conditionally
-        const { debugLogger: debug, performanceTracker: performance } = await loadDebugModules();
+        // Initialize debug tools based on build target
+        let debug, performance;
+        
+        if (config.isProduction) {
+            // Production: Use no-op implementations directly without loading modules
+            debug = createNoOpLogger();
+            performance = createNoOpPerformanceTracker();
+        } else {
+            // Development: Load actual debug modules
+            const { debugLogger, performanceTracker } = await loadDebugModules();
+            debug = debugLogger;
+            performance = performanceTracker;
+        }
         
         // Log initialization based on build type
         if (!config.isProduction) {
@@ -114,7 +125,7 @@ export const SequentialGPU = {
     getBuildInfo() {
         return {
             target: config.target,
-            version: '0.0.7',
+            version: '0.0.8',
             features: this.getFeatureSummary(),
             performance: {
                 queueOptimizations: config.queueOptimizations,
@@ -150,10 +161,12 @@ export const SequentialGPU = {
      * @param {string} level - Log level (error, warn, info, debug, trace)
      */
     async setLogLevel(level) {
-        if (!config.isProduction) {
-            const { debugLogger } = await loadDebugModules();
-            debugLogger.setLogLevel?.(level);
+        if (config.isProduction) {
+            return; // No-op in production
         }
+        
+        const { debugLogger } = await loadDebugModules();
+        debugLogger.setLogLevel?.(level);
     },
     
     /**
@@ -179,7 +192,7 @@ export const SequentialGPU = {
      */
     async resetState() {
         if (config.isProduction) {
-            return;
+            return; // No-op in production
         }
         
         const { debugLogger } = await loadDebugModules();

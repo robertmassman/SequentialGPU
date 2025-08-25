@@ -1,4 +1,4 @@
-import RenderQueue from "./renderQueue.js";
+import RenderQueue from "../queue/renderQueue.js";
 
 export class FilterManager {
     constructor(app) {

@@ -10,8 +10,11 @@ export const BUILD_TARGETS = {
 };
 
 export const getBuildConfig = () => {
-    const nodeEnv = process.env.NODE_ENV || 'development';
-    const buildTarget = process.env.BUILD_TARGET || (nodeEnv === 'production' ? 'production' : 'debug');
+    // Check if we're in a browser environment
+    const nodeEnv = typeof process !== 'undefined' ? (process.env.NODE_ENV || 'development') : 'development';
+    const buildTarget = typeof process !== 'undefined' ? 
+        (process.env.BUILD_TARGET || (nodeEnv === 'production' ? 'production' : 'debug')) : 
+        'debug'; // Default to debug in browser
     
     const config = {
         target: buildTarget,
@@ -55,8 +58,9 @@ export const getBuildConfig = () => {
 
 export const BUILD_FLAGS = {
     // Compile-time constants for conditional compilation
-    __PRODUCTION__: process.env.BUILD_TARGET === BUILD_TARGETS.PRODUCTION,
-    __DEBUG__: process.env.BUILD_TARGET === BUILD_TARGETS.DEBUG,
-    __PROFILE__: process.env.BUILD_TARGET === BUILD_TARGETS.PROFILE,
-    __DEV__: process.env.NODE_ENV !== 'production'
+    // Note: These values are replaced at build time by rollup for browser builds
+    __PRODUCTION__: typeof process !== 'undefined' ? process.env.BUILD_TARGET === BUILD_TARGETS.PRODUCTION : false,
+    __DEBUG__: typeof process !== 'undefined' ? process.env.BUILD_TARGET === BUILD_TARGETS.DEBUG : true,
+    __PROFILE__: typeof process !== 'undefined' ? process.env.BUILD_TARGET === BUILD_TARGETS.PROFILE : false,
+    __DEV__: typeof process !== 'undefined' ? process.env.NODE_ENV !== 'production' : true
 };

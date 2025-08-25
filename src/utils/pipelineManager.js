@@ -1,5 +1,5 @@
-import PipelineCacheManager from "./pipelineCacheManager.js";
-import GPUUtils from './gpuUtils.js';
+import PipelineCacheManager from "../memory/pipelineCacheManager.js";
+import GPUUtils from '../core/gpuUtils.js';
 
 class PipelineManager {
     constructor(app) {

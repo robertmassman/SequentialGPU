@@ -9,13 +9,13 @@ function buildConfigPlugin() {
     return {
         name: 'build-config',
         resolveId(id) {
-            if (id === '../build.config.js') {
+            if (id === '../../build.config.js') {
                 return id;
             }
             return null;
         },
         load(id) {
-            if (id === '../build.config.js') {
+            if (id === '../../build.config.js') {
                 const buildTarget = process.env.BUILD_TARGET || 'debug';
                 const nodeEnv = process.env.NODE_ENV || 'development';
                 
@@ -190,7 +190,7 @@ function getBuildConfig() {
     
     const configs = {
         production: {
-            input: './js/sequentialgpu.js',
+            input: './src/index.js',
             output: {
                 file: 'public/bundle.min.js',
                 format: 'es',
@@ -217,7 +217,7 @@ function getBuildConfig() {
         },
         
         debug: {
-            input: './js/sequentialgpu.js',
+            input: './src/index.js',
             output: {
                 file: 'public/bundle.js',
                 format: 'es',
@@ -237,7 +237,7 @@ function getBuildConfig() {
         },
         
         profile: {
-            input: './js/sequentialgpu.js',
+            input: './src/index.js',
             output: {
                 file: 'public/bundle.profile.js',
                 format: 'es',

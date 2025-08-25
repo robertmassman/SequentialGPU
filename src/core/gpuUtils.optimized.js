@@ -3,9 +3,9 @@
  * High-performance utility functions with conditional debug features
  */
 
-import { getBuildConfig } from '../build.config.js';
-import { getPerformanceTracker } from './performanceTracker.js';
-import { debug } from './debugLogger.enhanced.js';
+import { getBuildConfig } from '../../build.config.js';
+import { getPerformanceTracker } from '../utils/performanceTracker.js';
+import { debug } from '../utils/debugLogger.enhanced.js';
 
 class GPUUtils {
     static config = getBuildConfig();
