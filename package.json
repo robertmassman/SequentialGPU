@@ -1,6 +1,6 @@
 {
   "name": "sequentialgpu",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "A webGPU image processing implementation for rendering filter and their passes in sequence",
   "main": "public/bundle.min.js",
   "module": "public/bundle.min.js",
