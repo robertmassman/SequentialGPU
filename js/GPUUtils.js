@@ -349,13 +349,13 @@ class GPUUtils {
      * @param {number} delay - Delay in milliseconds
      * @returns {Function} Debounced function
      */
-    static debounce(func, delay) {
+    /*static debounce(func, delay) {
         let timeoutId;
         return function (...args) {
             clearTimeout(timeoutId);
             timeoutId = setTimeout(() => func.apply(this, args), delay);
         };
-    }
+    }*/
 }
 
 export default GPUUtils;

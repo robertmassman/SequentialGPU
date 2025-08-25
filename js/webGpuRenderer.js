@@ -8,7 +8,7 @@ import CommandQueueManager from "./commandQueueManager.js";
 import SettingsValidator from './settingsValidator.js';
 import RecoveryManager from "./recoveryManager.js";
 import DebugLogger from "./debugLogger.js";
-import GPUUtils from './gpuUtils.js';
+import GPUUtils from "./gpuUtils.js";
 
 export class WebGpuRenderer {
    constructor(settings) {
@@ -86,6 +86,34 @@ export class WebGpuRenderer {
       // Add disposal event listeners
       window.addEventListener('beforeunload', this._cleanup.bind(this));
 
+   }
+
+   startRenderMonitoring() {
+      setInterval(() => {
+         if (this.filterManager) {
+            const stats = this.filterManager.getRenderFrameStats();
+            // Add null check for queue stats
+            const queueStats = this.filterManager.renderQueue.getRenderFrameStats?.() || { totalCalls: 0, callsInLastSecond: 0 };
+
+            console.log('Render Stats:', {
+               renderFrameCalls: stats,
+               queuedRenderOps: queueStats,
+               queueStatus: this.filterManager.renderQueue.getStatus()
+            });
+         }
+      }, 2000);
+   }
+
+   // Method to get current render statistics
+   getRenderDiagnostics() {
+      if (!this.filterManager) return null;
+
+      return {
+         renderFrame: this.filterManager.getRenderFrameStats(),
+         renderQueue: this.filterManager.renderQueue.getRenderFrameStats(),
+         queueStatus: this.filterManager.renderQueue.getStatus(),
+         performance: this.filterManager.renderQueue.getPerformanceStats()
+      };
    }
 
    /**
@@ -340,6 +368,7 @@ export class WebGpuRenderer {
     * @returns {Promise<HTMLImageElement>} - Loaded image element
     */
    async loadImageSource(source) {
+      
       try {
          // Create image and load it
          const img = new Image();
@@ -350,7 +379,7 @@ export class WebGpuRenderer {
 
                // Revoke object URL if needed
                if (typeof source !== 'string' || source.startsWith('blob:')) {
-                  URL.revokeObjectURL(source);
+                  //URL.revokeObjectURL(source);
                }
 
                resolve(img);
@@ -364,7 +393,6 @@ export class WebGpuRenderer {
          throw error;
       }
    }
-
 
    // Resize with proper resource cleanup
    async resize(width, height, resetSize = false) {
@@ -1087,6 +1115,10 @@ export class WebGpuRenderer {
    }
 
    // Add these methods if you want easier access to queue operations
+   //queueOperation(operation, priority = 'normal', metadata = {}) {
+   //   return this.filterManager.renderQueue.queue(operation, priority, metadata);
+   //}
+   // Optimized queue operation method - remove wrapper overhead  
    queueOperation(operation, priority = 'normal', metadata = {}) {
       return this.filterManager.renderQueue.queue(operation, priority, metadata);
    }
@@ -1095,8 +1127,9 @@ export class WebGpuRenderer {
       return this.filterManager.renderQueue.clear();
    }
 
-   getQueuePerformanceStats() {
-      return this.filterManager.renderQueue.getPerformanceStats();
+   // Remove performance stats method since we simplified the queue
+   getRenderQueueStatus() {
+      return this.filterManager.renderQueue.getStatus();
    }
 }
 

@@ -1,6 +1,35 @@
 class BufferManager {
     constructor(device) {
         this.device = device;
+
+        // Initialize buffer tracking - THIS IS CRITICAL
+        this.bufferStats = {
+            totalCreated: 0,
+            currentCount: 0,
+            totalMemoryBytes: 0
+        };
+
+        // Optional: also initialize tracked buffers set
+        this.trackedBuffers = new Set();
+    }
+
+
+    /**
+     * Creates a tracked buffer with consistent settings
+     * @param {Object} descriptor - Buffer descriptor
+     * @returns {GPUBuffer} Created buffer with tracking
+     */
+    createTrackedBuffer(descriptor) {
+        const buffer = this.device.createBuffer(descriptor);
+
+        // Update stats
+        this.bufferStats.totalCreated++;
+        this.bufferStats.currentCount++;
+        this.bufferStats.totalMemoryBytes += descriptor.size;
+
+        //console.log(`🔧 Buffer created: ${descriptor.size} bytes, total: ${this.bufferStats.totalMemoryBytes}`);
+
+        return buffer;
     }
 
     applyOffsetPadding(size) {
@@ -84,6 +113,12 @@ class BufferManager {
      * @property {Function} update - Buffer update function
      */
     async createFilterBuffers(filter) {
+        if (!filter.bufferAttachment?.bindings) {
+            return null;
+        }
+
+
+
         const bindings = filter.bufferAttachment.bindings;
         const isCompute = filter.type === 'compute';
 
@@ -158,24 +193,83 @@ class BufferManager {
         // Apply final padding
         floatsSize = this.applyOffsetPadding(floatsSize);
 
-        // Create the buffer
-        const buffer = this.device.createBuffer({
-            size: Math.max(floatsSize, 16),
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-            label: `${filter.label} Buffer`
-        });
+        try {
+            // Create the buffer
+            //const buffer = this.device.createBuffer({
+            //    size: Math.max(floatsSize, 16),
+            //    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            //    label: `${filter.label} Buffer`
+            //});
+            // To this:
+            const buffer = this.createTrackedBuffer({
+                //size: layout.totalSize,
+                size: Math.max(floatsSize, 16),
+                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+                label: `${filter.label || 'filter'}-buffer`
+            });
 
-        // Write initial data
-        if (uniformsArray.length > 0) {
-            this.writeBuffer(buffer, 0, uniformsArray, 'uniform');
+            // Write initial data
+            if (uniformsArray.length > 0) {
+                this.writeBuffer(buffer, 0, uniformsArray, 'uniform');
+            }
+            if (floatsArray.length > 0) {
+                this.writeBuffer(buffer, uniformsSize, floatsArray, 'float');
+            }
+
+            return {
+                buffer,
+                update: (newBindings) => this.updateBufferData(buffer, newBindings, bindings)
+            };
+
+        } catch (error) {
+            console.error('Error creating filter buffers:', error);
+            throw error;
         }
-        if (floatsArray.length > 0) {
-            this.writeBuffer(buffer, uniformsSize, floatsArray, 'float');
+    }
+
+    /**
+     * Release a tracked buffer
+     * @param {GPUBuffer} buffer - Buffer to release
+     */
+    releaseBuffer(buffer) {
+        for (const trackedBuffer of this.trackedBuffers) {
+            if (trackedBuffer.buffer === buffer) {
+                this.trackedBuffers.delete(trackedBuffer);
+                this.bufferStats.currentCount--;
+                this.bufferStats.totalMemoryBytes -= trackedBuffer.size;
+
+                // Destroy the buffer
+                try {
+                    buffer.destroy();
+                } catch (error) {
+                    console.warn('Error destroying buffer:', error);
+                }
+                break;
+            }
         }
+    }
+
+    /**
+     * Get memory statistics for tracked buffers
+     * @returns {Object} Buffer memory statistics
+     */
+    /*getMemoryStats() {
+        return {
+            ...this.bufferStats,
+            averageBufferSize: this.bufferStats.currentCount > 0 ? 
+            this.bufferStats.totalMemoryBytes / this.bufferStats.currentCount : 0,
+            memoryMB: Math.round(this.bufferStats.totalMemoryBytes / (1024 * 1024) * 100) / 100
+        };
+    }*/
+    getMemoryStats() {
+        // Add some debugging to see what's happening
+        //console.log("📊 getMemoryStats called, bufferStats:", this.bufferStats);
 
         return {
-            buffer,
-            update: (newBindings) => this.updateBufferData(buffer, newBindings, bindings)
+            ...this.bufferStats,
+            averageBufferSize: this.bufferStats.currentCount > 0 ?
+                this.bufferStats.totalMemoryBytes / this.bufferStats.currentCount : 0,
+            memoryMB: Math.round(this.bufferStats.totalMemoryBytes / (1024 * 1024) * 100) / 100
         };
     }
 
@@ -211,6 +305,25 @@ class BufferManager {
             );
             throw error;
         }
+    }
+
+    /**
+     * Clean up all tracked buffers
+     */
+    dispose() {
+        for (const trackedBuffer of this.trackedBuffers) {
+            try {
+                trackedBuffer.buffer.destroy();
+            } catch (error) {
+                console.warn('Error destroying buffer during disposal:', error);
+            }
+        }
+        this.trackedBuffers.clear();
+        this.bufferStats = {
+            totalCreated: 0,
+            currentCount: 0,
+            totalMemoryBytes: 0
+        };
     }
 }
 

@@ -29,7 +29,7 @@ class PipelineManager {
 
     getCacheStats() {
         return {
-            ...this.pipelineCacheManager.getStats(),
+            ...this.pipelineCacheManager.getCacheStats(), // Use getCacheStats() instead
             shaderURLCacheSize: this.shaderCache.size
         };
     }

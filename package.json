@@ -2,10 +2,12 @@
   "name": "sequentialgpu",
   "version": "0.0.7",
   "description": "A webGPU image processing implementation for rendering filter and their passes in sequence",
-  "main": "public/bundle.js",
+  "main": "public/bundle.min.js",
   "files": [
+    "public/bundle.min.js",
     "public/bundle.js",
-    "public/bundle.js.map"
+    "public/bundle.js.map",
+    "public/bundle.profile.js"
   ],
   "type": "module",
   "keywords": [
@@ -28,7 +30,21 @@
   },
   "scripts": {
     "compile": "rollup -c",
-    "mapCompile": "npx rollup -c --environment SOURCE_MAP:true"
+    "mapCompile": "npx rollup -c --environment SOURCE_MAP:true",
+    "build": "npm run build:production",
+    "build:production": "BUILD_TARGET=production NODE_ENV=production rollup -c rollup.config.advanced.js",
+    "build:debug": "BUILD_TARGET=debug NODE_ENV=development rollup -c rollup.config.advanced.js",
+    "build:profile": "BUILD_TARGET=profile NODE_ENV=development rollup -c rollup.config.advanced.js",
+    "build:all": "npm run build:production && npm run build:debug && npm run build:profile",
+    "dev": "BUILD_TARGET=debug NODE_ENV=development rollup -c rollup.config.advanced.js --watch",
+    "analyze": "BUILD_TARGET=debug npm run build:debug && node scripts/analyze-bundle.js",
+    "performance": "BUILD_TARGET=profile npm run build:profile && node scripts/performance-test.js",
+    "perf-test": "npm run performance",
+    "validate": "node scripts/validate-builds.js",
+    "test": "npm run validate",
+    "test-production": "node scripts/test-production-bundle.js",
+    "clean": "rm -f public/bundle*.js public/bundle*.js.map",
+    "prebuild": "npm run clean"
   },
   "license": "ISC",
   "devDependencies": {

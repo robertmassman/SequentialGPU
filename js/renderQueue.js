@@ -10,67 +10,126 @@ class RenderQueue {
         };
 
         this.processTimeout = null;
-        this.debounceDelay = 16; // ~60fps
-        this.autoProcess = true; // Allow disabling auto-processing
+        this.debounceDelay = 0; // Immediate processing for performance
+        this.autoProcess = true;
 
-        this.performanceStats = {
-            averageExecutionTime: 0,
-            totalOperations: 0,
-            maxExecutionTime: 0,
-            minExecutionTime: Infinity
+        // Optimized tracking - simplified
+        this.maxDepth = 0;
+        this.renderFrameStats = {
+            totalCalls: 0
         };
+
+        // Lightweight performance stats (without expensive per-operation timing)
+        this.performanceStats = {
+            totalOperations: 0,
+            averageExecutionTime: 0, // Will be estimated
+            lastOperationTime: 0,
+            fastPathHits: 0
+        };
+
+        // Object pool to reduce memory allocation overhead
+        this.wrapperPool = [];
+        this.poolSize = 10;
+        this.idCounter = 0; // Faster than timestamp + random
+
+        // Pre-populate object pool
+        for (let i = 0; i < this.poolSize; i++) {
+            this.wrapperPool.push(this.createWrapperObject());
+        }
+
+        // Fast path flags
+        this.hasHighPriorityOps = false;
+        this.lastProcessTime = 0;
     }
 
-    queue(operation, priority = 'normal', metadata = {}, timeout = 30000) {
-        const id = this.generateId();
-
-        const operationWrapper = {
-            id,
-            operation,
-            priority,
-            metadata,
-            timestamp: Date.now(),
-            promise: null,
+    // Fast object creation for pooling
+    createWrapperObject() {
+        return {
+            id: null,
+            operation: null,
+            priority: 'normal',
+            metadata: null,
             resolve: null,
             reject: null,
             settled: false,
-            timeout: timeout
+            timeoutId: null
         };
+    }
 
-        // Add timeout handling in the promise
-        const timeoutId = setTimeout(() => {
-            if (!operationWrapper.settled) {
-                operationWrapper.reject(new Error(`Operation ${id} timed out`));
-            }
-        }, timeout);
+    // Optimized queue method with object pooling and fast path
+    queue(operation, priority = 'normal', metadata = {}) {
+        this.renderFrameStats.totalCalls++;
 
-        operationWrapper.promise = new Promise((resolve, reject) => {
-            operationWrapper.resolve = (value) => {
-                if (!operationWrapper.settled) {
-                    clearTimeout(timeoutId);
-                    operationWrapper.settled = true;
-                    resolve(value);
-                }
-            };
-            operationWrapper.reject = (error) => {
-                if (!operationWrapper.settled) {
-                    operationWrapper.settled = true;
-                    reject(error);
-                }
-            };
+        // Fast path: if not processing and queue is empty, execute immediately
+        if (!this.isProcessing && this.pendingOperations.size === 0 && priority === 'normal') {
+            return this.executeImmediate(operation);
+        }
+
+        // Get wrapper from pool or create new one
+        const wrapper = this.wrapperPool.pop() || this.createWrapperObject();
+        
+        // Fast ID generation
+        wrapper.id = ++this.idCounter;
+        wrapper.operation = operation;
+        wrapper.priority = priority;
+        wrapper.metadata = metadata;
+        wrapper.settled = false;
+
+        // Simplified promise without timeout overhead for normal operations
+        const promise = new Promise((resolve, reject) => {
+            wrapper.resolve = resolve;
+            wrapper.reject = reject;
         });
 
-        this.pendingOperations.set(id, operationWrapper);
+        this.pendingOperations.set(wrapper.id, wrapper);
         this.stats.queued++;
+
+        // Track priority for processing optimization
+        if (priority === 'high' || priority === 'urgent') {
+            this.hasHighPriorityOps = true;
+        }
+
+        // Update max depth efficiently
+        if (this.pendingOperations.size > this.maxDepth) {
+            this.maxDepth = this.pendingOperations.size;
+        }
 
         if (this.autoProcess) {
             this.scheduleProcess();
         }
 
-        return operationWrapper.promise;
+        return promise;
+    }
+
+    // Fast path execution for single operations
+    async executeImmediate(operation) {
+        this.isProcessing = true;
+        try {
+            const result = await operation();
+            this.stats.completed++;
+            this.performanceStats.totalOperations++;
+            this.performanceStats.fastPathHits++;
+            return result;
+        } catch (error) {
+            this.stats.failed++;
+            throw error;
+        } finally {
+            this.isProcessing = false;
+        }
     }
 
     scheduleProcess() {
+        // Immediate processing if no debounce delay
+        if (this.debounceDelay === 0) {
+            if (!this.isProcessing && this.pendingOperations.size > 0) {
+                this.process().catch(error => {
+                    console.error('Auto-process error:', error);
+                });
+            }
+            return;
+        }
+
+        // Standard debounced processing
         if (this.processTimeout) {
             clearTimeout(this.processTimeout);
         }
@@ -82,9 +141,13 @@ class RenderQueue {
                     console.error('Auto-process error:', error);
                 });
             }
-        }, this.debounceDelay || 16);
+        }, this.debounceDelay);
     }
 
+    getRenderFrameStats() {
+        return { ...this.renderFrameStats };
+    }
+    
     // Add error recovery method
     handleProcessError(error) {
         console.error('Critical render queue error:', error);
@@ -113,42 +176,68 @@ class RenderQueue {
         this.isProcessing = true;
 
         try {
-            let processedCount = 0;
-
+            // Optimized processing loop
             while (this.pendingOperations.size > 0) {
-                const operations = Array.from(this.pendingOperations.entries())
-                    .sort(([idA, opA], [idB, opB]) => {
+                let operationToExecute;
+
+                // Fast path: single operation or no priority sorting needed
+                if (this.pendingOperations.size === 1 || !this.hasHighPriorityOps) {
+                    // Take first operation without sorting overhead
+                    const [id, wrapper] = this.pendingOperations.entries().next().value;
+                    operationToExecute = { id, wrapper };
+                } else {
+                    // Optimized sorting: only when multiple operations with different priorities
+                    const operations = Array.from(this.pendingOperations.entries());
+                    operations.sort(([idA, opA], [idB, opB]) => {
                         const priorityDiff = this.getPriorityValue(opB.priority) - this.getPriorityValue(opA.priority);
-                        return priorityDiff === 0 ? opA.timestamp - opB.timestamp : priorityDiff;
+                        return priorityDiff;
                     });
-
-                if (operations.length === 0) break;
-
-                const [id, { operation, metadata, resolve, reject }] = operations[0];
-                this.pendingOperations.delete(id);
-                this.stats.queued--;
-                this.currentOperation = { id, metadata };
-
-                try {
-                    const startTime = performance.now();
-                    const result = await operation();
-                    const executionTime = performance.now() - startTime;
-
-                    // Update performance stats
-                    this.updatePerformanceStats(executionTime);
-
-                    this.stats.completed++;
-
-                    if (resolve) resolve(result);
-                } catch (error) {
-                    console.error('Render operation failed:', error);
-                    this.stats.failed++;
-                    if (reject) reject(error);
+                    operationToExecute = { id: operations[0][0], wrapper: operations[0][1] };
                 }
 
+                const { id, wrapper } = operationToExecute;
+                const { operation, resolve, reject } = wrapper;
+
+                // Remove from queue
+                this.pendingOperations.delete(id);
+                this.stats.queued--;
+                this.currentOperation = { id, metadata: wrapper.metadata };
+
+                try {
+                    // Execute operation with lightweight timing
+                    const startTime = this.performanceStats.totalOperations % 10 === 0 ? performance.now() : 0;
+                    const result = await operation();
+                    if (startTime > 0) {
+                        this.performanceStats.lastOperationTime = performance.now() - startTime;
+                        // Update average (simple moving average)
+                        this.performanceStats.averageExecutionTime = 
+                            (this.performanceStats.averageExecutionTime * 0.9) + 
+                            (this.performanceStats.lastOperationTime * 0.1);
+                    }
+                    this.stats.completed++;
+                    this.performanceStats.totalOperations++;
+                    
+                    // Resolve and return wrapper to pool
+                    if (resolve && !wrapper.settled) {
+                        wrapper.settled = true;
+                        resolve(result);
+                    }
+                } catch (error) {
+                    this.stats.failed++;
+                    if (reject && !wrapper.settled) {
+                        wrapper.settled = true;
+                        reject(error);
+                    }
+                }
+
+                // Return wrapper to pool for reuse
+                this.returnWrapperToPool(wrapper);
                 this.currentOperation = null;
-                processedCount++;
             }
+
+            // Reset priority flag when queue is empty
+            this.hasHighPriorityOps = false;
+
         } catch (criticalError) {
             this.handleProcessError(criticalError);
             throw criticalError;
@@ -157,7 +246,25 @@ class RenderQueue {
         }
     }
 
-    // Reset stats
+    // Return wrapper object to pool for reuse
+    returnWrapperToPool(wrapper) {
+        // Reset wrapper properties
+        wrapper.id = null;
+        wrapper.operation = null;
+        wrapper.priority = 'normal';
+        wrapper.metadata = null;
+        wrapper.resolve = null;
+        wrapper.reject = null;
+        wrapper.settled = false;
+        wrapper.timeoutId = null;
+
+        // Only keep pool at reasonable size
+        if (this.wrapperPool.length < this.poolSize) {
+            this.wrapperPool.push(wrapper);
+        }
+    }
+
+    // Simplified stats
     resetStats() {
         this.stats = {
             completed: 0,
@@ -165,14 +272,14 @@ class RenderQueue {
             queued: this.pendingOperations.size
         };
         this.performanceStats = {
-            averageExecutionTime: 0,
             totalOperations: 0,
-            maxExecutionTime: 0,
-            minExecutionTime: Infinity
+            averageExecutionTime: 0,
+            lastOperationTime: 0,
+            fastPathHits: 0
         };
     }
 
-    // Add method to get current status
+    // Simplified status
     getStatus() {
         return {
             isProcessing: this.isProcessing,
@@ -194,26 +301,27 @@ class RenderQueue {
     }
 
     generateId() {
-        return Date.now().toString(36) + Math.random().toString(36).substr(2);
+        return this.idCounter++; // Much faster than timestamp + random
     }
 
     cancel(id) {
         return this.pendingOperations.delete(id);
     }
 
-    // Update clear method to be safer
+    // Simplified clear method
     clear(force = false) {
         if (!force && this.isProcessing) {
-            // If processing and not forced, use graceful stop
             this.stopAfterCurrent();
             return;
         }
 
-        // Force clear - reject everything
-        for (const [id, operation] of this.pendingOperations.entries()) {
-            if (operation.reject) {
-                operation.reject(new Error('Queue cleared'));
+        // Return all wrappers to pool before clearing
+        for (const [id, wrapper] of this.pendingOperations.entries()) {
+            if (wrapper.reject && !wrapper.settled) {
+                wrapper.settled = true;
+                wrapper.reject(new Error('Queue cleared'));
             }
+            this.returnWrapperToPool(wrapper);
         }
 
         if (this.processTimeout) {
@@ -224,38 +332,30 @@ class RenderQueue {
         this.pendingOperations.clear();
         this.stats.queued = 0;
         this.currentOperation = null;
+        this.hasHighPriorityOps = false;
     }
 
-    // Other Methods
+    getRenderFrameStats() {
+        return { ...this.renderFrameStats };
+    }
 
-    // These help you identify performance bottlenecks
-    // Get performance stats
+    // Lightweight performance stats without expensive per-operation timing
     getPerformanceStats() {
-        return { ...this.performanceStats };
+        return {
+            totalOperations: this.performanceStats.totalOperations,
+            averageExecutionTime: this.performanceStats.averageExecutionTime,
+            lastOperationTime: this.performanceStats.lastOperationTime,
+            fastPathHits: this.performanceStats.fastPathHits,
+            fastPathRatio: this.performanceStats.totalOperations > 0 ? 
+                (this.performanceStats.fastPathHits / this.performanceStats.totalOperations) : 0,
+            // Legacy compatibility fields
+            maxExecutionTime: this.performanceStats.lastOperationTime,
+            minExecutionTime: this.performanceStats.lastOperationTime,
+            currentExecutionTime: this.performanceStats.lastOperationTime
+        };
     }
 
-    // Update performance stats after each operation
-    updatePerformanceStats(executionTime) {
-        this.performanceStats.totalOperations++;
-        this.performanceStats.maxExecutionTime = Math.max(this.performanceStats.maxExecutionTime, executionTime);
-        this.performanceStats.minExecutionTime = Math.min(this.performanceStats.minExecutionTime, executionTime);
-
-        // Calculate rolling average
-        const alpha = 0.1; // Weight for new values
-        this.performanceStats.averageExecutionTime =
-            (this.performanceStats.averageExecutionTime * (1 - alpha)) +
-            (executionTime * alpha);
-    }
-
-
-    // Useful for testing different frame rates
-    // Set custom debounce delay
-    setDebounceDelay(delay) {
-        this.debounceDelay = Math.max(0, delay);
-    }
-
-
-    // Helpful for debugging queue behavior
+    // Immediate processing for debugging
     async processNow() {
         if (this.processTimeout) {
             clearTimeout(this.processTimeout);
@@ -264,55 +364,46 @@ class RenderQueue {
         return this.process();
     }
 
-    // Disable/enable auto-processing
-    setAutoProcess(enabled) {
-        this.autoProcess = enabled;
-        if (!enabled && this.processTimeout) {
-            clearTimeout(this.processTimeout);
-            this.processTimeout = null;
-        }
-    }
-
-
-    // Useful when you need to cancel specific operation types
+    // Cancel operations by metadata
     cancelByMetadata(key, value) {
         let cancelled = 0;
-        for (const [id, op] of this.pendingOperations.entries()) {
-            if (op.metadata[key] === value) {
-                // Check if reject exists before calling
-                if (op.reject && typeof op.reject === 'function') {
-                    op.reject(new Error('Operation cancelled'));
+        for (const [id, wrapper] of this.pendingOperations.entries()) {
+            if (wrapper.metadata && wrapper.metadata[key] === value) {
+                if (wrapper.reject && !wrapper.settled) {
+                    wrapper.settled = true;
+                    wrapper.reject(new Error('Operation cancelled'));
                 }
                 this.pendingOperations.delete(id);
+                this.returnWrapperToPool(wrapper);
                 cancelled++;
-                this.stats.queued = Math.max(0, this.stats.queued - 1); // Update stats
+                this.stats.queued = Math.max(0, this.stats.queued - 1);
             }
         }
         return cancelled;
     }
 
     
-    // Good for graceful shutdown
-    // Add this new method to gracefully stop after current operation
+    // Simplified graceful stop
     stopAfterCurrent() {
         const currentId = this.currentOperation?.id;
 
-        for (const [id, operation] of this.pendingOperations.entries()) {
-            if (id !== currentId && operation.reject && typeof operation.reject === 'function' && !operation.settled) {
+        for (const [id, wrapper] of this.pendingOperations.entries()) {
+            if (id !== currentId && wrapper.reject && !wrapper.settled) {
                 try {
-                    operation.settled = true; // Mark as settled before rejecting
-                    operation.reject(new Error('Queue stopped'));
+                    wrapper.settled = true;
+                    wrapper.reject(new Error('Queue stopped'));
                 } catch (error) {
                     console.warn(`Failed to reject operation ${id}:`, error);
                 }
+                this.returnWrapperToPool(wrapper);
             }
         }
 
         // Remove all except current operation
         if (currentId && this.pendingOperations.has(currentId)) {
-            const currentOp = this.pendingOperations.get(currentId);
+            const currentWrapper = this.pendingOperations.get(currentId);
             this.pendingOperations.clear();
-            this.pendingOperations.set(currentId, currentOp);
+            this.pendingOperations.set(currentId, currentWrapper);
             this.stats.queued = 1;
         } else {
             this.pendingOperations.clear();

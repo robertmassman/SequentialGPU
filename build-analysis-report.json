@@ -1,0 +1,202 @@
+{
+  "bundles": {
+    "production": {
+      "name": "production",
+      "target": "production",
+      "size": {
+        "bytes": 247721,
+        "kb": 241.92,
+        "mb": 0.24
+      },
+      "lines": 7176,
+      "minified": false,
+      "features": {
+        "hasDebugCode": true,
+        "hasPerformanceTracking": true,
+        "hasAssertions": false,
+        "hasVerboseErrors": false,
+        "hasResourceTracking": true,
+        "hasDetailedStats": true,
+        "debugLogCount": 32,
+        "performanceCallCount": 4,
+        "conditionalChecks": 8
+      },
+      "performance": {
+        "fastPathOptimizations": true,
+        "objectPooling": true,
+        "caching": true,
+        "inlineOptimizations": true,
+        "asyncChains": 15,
+        "promiseCreations": 5,
+        "mapOperations": 11,
+        "forLoops": 53
+      },
+      "treeshaking": {
+        "unused imports": 0,
+        "unreachable code": 0,
+        "debug blocks": 14,
+        "commented code": 104
+      },
+      "compression": {
+        "estimatedGzipRatio": 80,
+        "repetitivePatterns": [
+          1410,
+          23,
+          373,
+          249
+        ]
+      }
+    },
+    "debug": {
+      "name": "debug",
+      "target": "debug",
+      "size": {
+        "bytes": 249762,
+        "kb": 243.91,
+        "mb": 0.24
+      },
+      "lines": 7251,
+      "minified": false,
+      "features": {
+        "hasDebugCode": true,
+        "hasPerformanceTracking": true,
+        "hasAssertions": false,
+        "hasVerboseErrors": false,
+        "hasResourceTracking": true,
+        "hasDetailedStats": true,
+        "debugLogCount": 32,
+        "performanceCallCount": 4,
+        "conditionalChecks": 33
+      },
+      "performance": {
+        "fastPathOptimizations": true,
+        "objectPooling": true,
+        "caching": true,
+        "inlineOptimizations": true,
+        "asyncChains": 15,
+        "promiseCreations": 5,
+        "mapOperations": 11,
+        "forLoops": 53
+      },
+      "treeshaking": {
+        "unused imports": 0,
+        "unreachable code": 0,
+        "debug blocks": 14,
+        "commented code": 104
+      },
+      "compression": {
+        "estimatedGzipRatio": 80,
+        "repetitivePatterns": [
+          1453,
+          25,
+          374,
+          252
+        ]
+      }
+    },
+    "profile": {
+      "name": "profile",
+      "target": "profile",
+      "size": {
+        "bytes": 249712,
+        "kb": 243.86,
+        "mb": 0.24
+      },
+      "lines": 7249,
+      "minified": false,
+      "features": {
+        "hasDebugCode": true,
+        "hasPerformanceTracking": true,
+        "hasAssertions": false,
+        "hasVerboseErrors": false,
+        "hasResourceTracking": true,
+        "hasDetailedStats": true,
+        "debugLogCount": 32,
+        "performanceCallCount": 4,
+        "conditionalChecks": 33
+      },
+      "performance": {
+        "fastPathOptimizations": true,
+        "objectPooling": true,
+        "caching": true,
+        "inlineOptimizations": true,
+        "asyncChains": 15,
+        "promiseCreations": 5,
+        "mapOperations": 11,
+        "forLoops": 53
+      },
+      "treeshaking": {
+        "unused imports": 0,
+        "unreachable code": 0,
+        "debug blocks": 14,
+        "commented code": 104
+      },
+      "compression": {
+        "estimatedGzipRatio": 80,
+        "repetitivePatterns": [
+          1453,
+          25,
+          371,
+          252
+        ]
+      }
+    }
+  },
+  "comparisons": {
+    "sizeReduction": {
+      "debugToProduction": {
+        "bytes": 2041,
+        "percentage": 0.82,
+        "ratio": "99% of original"
+      },
+      "profileToProduction": {
+        "bytes": 1991,
+        "percentage": 0.8,
+        "ratio": "99% of original"
+      }
+    },
+    "featureElimination": {
+      "debugCodeRemoved": false,
+      "performanceTrackingRemoved": false,
+      "assertionsRemoved": false
+    },
+    "optimizationEffectiveness": {
+      "conditionalChecksReduced": 25,
+      "debugCallsRemoved": 0,
+      "performanceCallsRemoved": 0
+    }
+  },
+  "optimization": {
+    "bundleSize": "excellent",
+    "minification": "missing",
+    "treeShaking": "ineffective",
+    "deadCodeElimination": "partial",
+    "performanceOptimizations": {
+      "fastPath": true,
+      "objectPooling": true,
+      "caching": true
+    }
+  },
+  "recommendations": [
+    {
+      "type": "optimization",
+      "priority": "medium",
+      "message": "32 debug calls found in production build",
+      "suggestions": [
+        "Improve dead code elimination",
+        "Add more aggressive debug code removal",
+        "Use conditional compilation flags"
+      ]
+    },
+    {
+      "type": "build",
+      "priority": "medium",
+      "message": "Low size reduction between debug and production builds",
+      "suggestions": [
+        "Review build configuration for better optimization",
+        "Ensure debug code is properly marked for elimination",
+        "Consider using more aggressive minification settings"
+      ]
+    }
+  ]
+}

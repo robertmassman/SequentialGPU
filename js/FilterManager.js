@@ -26,6 +26,19 @@ export class FilterManager {
         this.filters = app.filters;
         this.canvas = app.canvas;
 
+        // Add render frame tracking
+        this.renderFrameStats = {
+            callCount: 0,
+            totalCalls: 0,
+            lastResetTime: performance.now(),
+            callsPerSecond: 0
+        };
+        
+        // Optional: Reset stats periodically
+        this.statsResetInterval = setInterval(() => {
+            this.calculateRenderFrameRate();
+        }, 1000); // Calculate FPS every second
+
     }
 
     /**
@@ -266,14 +279,37 @@ export class FilterManager {
 
     waitForRenderComplete() {
         let id = this.renderCompleteCounter++;
+        const startTime = performance.now();
+        
         return new Promise(resolve => {
-            this.renderCompleteCallbacks.set(id, resolve);
+            this.renderCompleteCallbacks.set(id, (completionData = {}) => {
+                const duration = performance.now() - startTime;
+                resolve({
+                    success: true,
+                    duration,
+                    completedAt: performance.now(),
+                    id,
+                    queueStats: this.renderQueue.getStatus(),
+                    renderStats: this.getRenderFrameStats(),
+                    ...completionData
+                });
+            });
+            
             // Set timeout to prevent infinite waiting
             setTimeout(() => {
                 if (this.renderCompleteCallbacks.has(id)) {
                     console.warn("Render completion timeout triggered");
                     this.renderCompleteCallbacks.delete(id);
-                    resolve(); // Resolve anyway to prevent hanging promises
+                    const duration = performance.now() - startTime;
+                    resolve({
+                        success: false,
+                        timedOut: true,
+                        duration,
+                        completedAt: performance.now(),
+                        id,
+                        queueStats: this.renderQueue.getStatus(),
+                        renderStats: this.getRenderFrameStats()
+                    });
                 }
             }, 30000); // 30 seconds timeout
         });
@@ -303,6 +339,10 @@ export class FilterManager {
     }
 
     async updateOutputCanvas(drawToCanvas, transformations, filterUpdateConditions) {
+        const startTime = performance.now();
+
+        const renderFrameStart = performance.now();
+
         // Check if we're already inside a queue operation
         if (this.renderQueue.isProcessing) {
             // We're ALREADY inside a queue operation
@@ -313,6 +353,12 @@ export class FilterManager {
             try {
                 // So we bypass the queue and render directly
                 const renderResult = await this.renderFrame(drawToCanvas, transformations, filterUpdateConditions);
+
+                const renderFrameTime = performance.now() - renderFrameStart;
+
+                console.log(`📊 FilterManager timing: total=${performance.now() - startTime}ms, renderFrame=${renderFrameTime}ms`);
+
+                
                 return { success: true, complete: renderResult, error: null };
             } catch (error) {
                 console.error('Direct render error:', error);
@@ -344,6 +390,10 @@ export class FilterManager {
     }
 
     async renderFrame(drawToCanvas, transformations, filterUpdateConditions) {
+        // Increment counter at the start
+        this.renderFrameStats.callCount++;
+        this.renderFrameStats.totalCalls++;
+
         const currentTime = performance.now();
         const deltaTime = currentTime - this.lastFrameTime;
 
@@ -433,10 +483,53 @@ export class FilterManager {
     }
 
     notifyRenderComplete() {
+        const completionData = {
+            timestamp: performance.now(),
+            queueEmpty: this.renderQueue.getStatus().pendingCount === 0,
+            renderFrameStats: this.getRenderFrameStats()
+        };
+        
         for (const [id, callback] of this.renderCompleteCallbacks.entries()) {
-
-            callback();
+            callback(completionData);
             this.renderCompleteCallbacks.delete(id);
+        }
+    }
+
+    calculateRenderFrameRate() {
+        const now = performance.now();
+        const timeDiff = (now - this.renderFrameStats.lastResetTime) / 1000;
+        this.renderFrameStats.callsPerSecond = this.renderFrameStats.callCount / timeDiff;
+        
+        // Optional: Log if calls seem excessive
+        if (this.renderFrameStats.callsPerSecond > 120) { // More than 120 FPS
+            console.warn(`renderFrame called ${this.renderFrameStats.callsPerSecond.toFixed(1)} times per second`);
+        }
+
+        // Reset for next interval
+        this.renderFrameStats.callCount = 0;
+        this.renderFrameStats.lastResetTime = now;
+
+    }
+    
+    getRenderFrameStats() {
+        return {
+            callCount: this.renderFrameStats.callCount,
+            totalCalls: this.renderFrameStats.totalCalls,
+            callsPerSecond: this.renderFrameStats.callsPerSecond,
+            lastResetTime: this.renderFrameStats.lastResetTime
+        };
+    }
+    
+    resetRenderFrameStats() {
+        this.renderFrameStats.callCount = 0;
+        this.renderFrameStats.lastResetTime = performance.now();
+        this.renderFrameStats.callsPerSecond = 0;
+    }
+    // Clean up interval on disposal
+    dispose() {
+        if (this.statsResetInterval) {
+            clearInterval(this.statsResetInterval);
+            this.statsResetInterval = null;
         }
     }
 

@@ -5,17 +5,24 @@ node_modules/
 logs
 *.log
 npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # IDE files
 .idea/
 .vscode/
+*.swp
+*.swo
+*~
 
 # npm configuration with potential tokens
 .npmrc
 
-# DO NOT ignore these build artifacts
+# DO NOT ignore these build artifacts - they're part of the published package
 # public/bundle.js
 # public/bundle.js.map
+# public/bundle.min.js
+# public/bundle.profile.js
 
 # OS files
 .DS_Store
@@ -27,3 +34,10 @@ Thumbs.db
 .env.development.local
 .env.test.local
 .env.production.local
+
+# Temporary files
+*.tmp
+*.temp
+
+# Personal development notes (add if you have any)
+# developerREADME.md

@@ -1,26 +1,16 @@
-/**
- * SequentialGPU Build Configuration (Generated at build time)
- */
-
-const BUILD_TARGETS = {
-    PRODUCTION: 'production',
-    DEBUG: 'debug', 
-    PROFILE: 'profile'
-};
-
 const getBuildConfig = () => {
     const config = {
-        target: "debug",
+        target: "profile",
         isProduction: false,
-        isDebug: true,
-        isProfile: false,
+        isDebug: false,
+        isProfile: true,
         
         // Performance settings
         enablePerformanceTracking: true,
-        enableDebugLogging: true,
-        enableAssertions: true,
+        enableDebugLogging: false,
+        enableAssertions: false,
         enableResourceTracking: true,
-        enableVerboseErrors: true,
+        enableVerboseErrors: false,
         
         // Optimization flags
         minifyCode: false,
@@ -47,14 +37,6 @@ const getBuildConfig = () => {
     };
     
     return config;
-};
-
-const BUILD_FLAGS = {
-    // Compile-time constants for conditional compilation
-    __PRODUCTION__: false,
-    __DEBUG__: true,
-    __PROFILE__: false,
-    __DEV__: true
 };
 
 /**
@@ -1266,12 +1248,12 @@ class PipelineManager {
             // Check if it's a shader compilation error
             if (error.name === 'ShaderCompilationError') {
                 // Format error for display
-                const errorDetails = {
+                ({
                     label: filter.label || 'Unknown Shader',
                     summary: error.message,
                     details: this._parseShaderErrorMessage(error.message),
                     errorCount: 1
-                };
+                });
             }
             console.error(`Failed to create pipeline for filter ${filter.label}`, error);
             throw error;
@@ -4550,8 +4532,7 @@ class WebGpuRenderer {
       // Example debug log
       if (settings.debug) {
          this.debugLogger.log('App', 'Initializing with settings:', settings);
-      };
-      // Modify the monitoring interval
+      }      // Modify the monitoring interval
       if (settings.debug) {
          this.monitoringInterval = setInterval(() => {
             this.debugLogger.log('Performance', 'Current Stats', {
@@ -4559,8 +4540,7 @@ class WebGpuRenderer {
                commandQueue: this.commandQueue?.stats
             });
          }, 10000);
-      };
-
+      }
       // Add disposal event listeners
       window.addEventListener('beforeunload', this._cleanup.bind(this));
 
@@ -4990,7 +4970,7 @@ class WebGpuRenderer {
    createTexCordBuffer() {
       const key = Object.keys(this.textures)
          .find(key => this.textures[key].copyImageTo);
-      const resource = key ? this.textureManager.getTexture(key).createView() : undefined;
+      key ? this.textureManager.getTexture(key).createView() : undefined;
 
       // Create tracked buffer
       this.texCordBuffer = this.createTrackedBuffer({
@@ -7254,4 +7234,4 @@ var debugLogger_enhanced = /*#__PURE__*/Object.freeze({
 });
 
 export { RenderQueue, SequentialGPU, WebGpuRenderer, buildConfig, SequentialGPU as default, loadDebugModules };
-//# sourceMappingURL=bundle.js.map
+//# sourceMappingURL=bundle.profile.js.map

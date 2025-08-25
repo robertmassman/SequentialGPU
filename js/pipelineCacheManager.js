@@ -15,6 +15,8 @@ class PipelineCacheManager {
             shadersCompiled: 0,
             pipelinesCreated: 0,
             pipelinesReused: 0,
+            totalPipelineOps: 0,
+            pipelineReuseRate: 0,
             layoutsCreated: 0,
             layoutsReused: 0,
             cacheHits: 0,
@@ -32,6 +34,7 @@ class PipelineCacheManager {
             // Cache efficiency
             hitRate: 0,
             missRate: 0,
+            totalCacheRequests: 0,
 
             // Timestamps
             lastUpdate: Date.now(),
@@ -174,6 +177,7 @@ class PipelineCacheManager {
         // Update cache efficiency metrics
         const totalOperations = this.stats.cacheHits + this.stats.cacheMisses;
         if (totalOperations > 0) {
+            this.stats.totalCacheRequests = totalOperations;
             this.stats.hitRate = this.stats.cacheHits / totalOperations;
             this.stats.missRate = this.stats.cacheMisses / totalOperations;
         }
@@ -188,6 +192,12 @@ class PipelineCacheManager {
             this.stats.peakCacheSize,
             this.stats.currentCacheSize
         );
+
+        const totalPipelineOps = this.stats.pipelinesCreated + this.stats.pipelinesReused;
+        if (totalPipelineOps > 0) {
+            this.stats.totalPipelineOps = totalPipelineOps;
+            this.stats.pipelineReuseRate = this.stats.pipelinesReused / totalPipelineOps;
+        }
 
         // Update timestamps
         this.stats.lastUpdate = now;

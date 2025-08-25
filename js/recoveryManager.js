@@ -393,9 +393,10 @@ class RecoveryManager {
      */
     _recoveryNotification() {
         if (this.app) {
-            if (typeof this.app.handleContextRecovery === 'function') {
+            console.log(this.app.renderManager)
+            if (typeof this.app.renderManager.handleContextRecovery === 'function') {
                 // Call the handler method on RenderManager
-                this.app.handleContextRecovery();
+                this.app.renderManager.handleContextRecovery();
                 console.log('Notified RenderManager about context recovery');
             }
             else{
